@@ -101,11 +101,8 @@ public class RemoveUnhealthyNodesRequest extends ClusterManagerNodeRequest<Remov
         final Set<DiscoveryNode> nodesToRemove = resolveUnhealthyNodesForRemoval(currentState);
 
         if (nodesToRemove.isEmpty()) {
-            throw new IllegalArgumentException(
-                "remove unhealthy nodes request matched no unhealthy nodes. "
-                    + "All cluster nodes appear to be in the healthy IP list: "
-                    + Arrays.toString(healthyNodeIps)
-            );
+            // Return empty set - let the transport action handle this as success
+            return nodesToRemove;
         }
 
         // Validate that we're not removing all cluster manager nodes

@@ -311,8 +311,8 @@ public class FollowersChecker {
     private void handleDisconnectedNode(DiscoveryNode discoveryNode) {
         FollowerChecker followerChecker = followerCheckers.get(discoveryNode);
         if (followerChecker != null) {
-            logger.info(() -> new ParameterizedMessage("{} disconnected", followerChecker));
-            followerChecker.failNode("disconnected");
+//            logger.info(() -> new ParameterizedMessage("{} disconnected", followerChecker));
+//            followerChecker.failNode("disconnected");
         }
     }
 
@@ -355,7 +355,7 @@ public class FollowersChecker {
 
         void start() {
             assert running();
-            handleWakeUp();
+//            handleWakeUp();
         }
 
         private void handleWakeUp() {
