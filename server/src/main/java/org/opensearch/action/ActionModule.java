@@ -37,9 +37,11 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.action.admin.cluster.allocation.ClusterAllocationExplainAction;
 import org.opensearch.action.admin.cluster.allocation.TransportClusterAllocationExplainAction;
 import org.opensearch.action.admin.cluster.configuration.AddVotingConfigExclusionsAction;
+import org.opensearch.action.admin.cluster.configuration.BecomeCandidateAction;
 import org.opensearch.action.admin.cluster.configuration.ClearVotingConfigExclusionsAction;
 import org.opensearch.action.admin.cluster.configuration.RemoveUnhealthyNodesAction;
 import org.opensearch.action.admin.cluster.configuration.TransportAddVotingConfigExclusionsAction;
+import org.opensearch.action.admin.cluster.configuration.TransportBecomeCandidateAction;
 import org.opensearch.action.admin.cluster.configuration.TransportClearVotingConfigExclusionsAction;
 import org.opensearch.action.admin.cluster.configuration.TransportRemoveUnhealthyNodesAction;
 import org.opensearch.action.admin.cluster.decommission.awareness.delete.DeleteDecommissionStateAction;
@@ -342,6 +344,7 @@ import org.opensearch.rest.RestHeaderDefinition;
 import org.opensearch.rest.action.RestFieldCapabilitiesAction;
 import org.opensearch.rest.action.RestMainAction;
 import org.opensearch.rest.action.admin.cluster.RestAddVotingConfigExclusionAction;
+import org.opensearch.rest.action.admin.cluster.RestBecomeCandidateAction;
 import org.opensearch.rest.action.admin.cluster.RestCancelTasksAction;
 import org.opensearch.rest.action.admin.cluster.RestCleanupRepositoryAction;
 import org.opensearch.rest.action.admin.cluster.RestClearVotingConfigExclusionsAction;
@@ -647,6 +650,7 @@ public class ActionModule extends AbstractModule {
         actions.register(GetTaskAction.INSTANCE, TransportGetTaskAction.class);
         actions.register(CancelTasksAction.INSTANCE, TransportCancelTasksAction.class);
 
+        actions.register(BecomeCandidateAction.INSTANCE, TransportBecomeCandidateAction.class);
         actions.register(RemoveUnhealthyNodesAction.INSTANCE, TransportRemoveUnhealthyNodesAction.class);
         actions.register(AddVotingConfigExclusionsAction.INSTANCE, TransportAddVotingConfigExclusionsAction.class);
         actions.register(ClearVotingConfigExclusionsAction.INSTANCE, TransportClearVotingConfigExclusionsAction.class);
@@ -847,6 +851,7 @@ public class ActionModule extends AbstractModule {
             }
             restController.registerHandler(handler);
         };
+        registerHandler.accept(new RestBecomeCandidateAction());
         registerHandler.accept(new RestRemoveUnhealthyNodesAction());
         registerHandler.accept(new RestAddVotingConfigExclusionAction());
         registerHandler.accept(new RestClearVotingConfigExclusionsAction());

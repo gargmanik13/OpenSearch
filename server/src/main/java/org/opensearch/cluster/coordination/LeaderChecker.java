@@ -375,7 +375,7 @@ public class LeaderChecker {
         void handleDisconnectedNode(DiscoveryNode discoveryNode) {
             if (discoveryNode.equals(leader)) {
                 logger.debug("leader [{}] disconnected", leader);
-                leaderFailed(new NodeDisconnectedException(discoveryNode, "disconnected"));
+//                leaderFailed(new NodeDisconnectedException(discoveryNode, "disconnected"));
             }
         }
 
@@ -384,7 +384,7 @@ public class LeaderChecker {
             transportService.getThreadPool().schedule(new Runnable() {
                 @Override
                 public void run() {
-                    handleWakeUp();
+//                    handleWakeUp();
                 }
 
                 @Override
