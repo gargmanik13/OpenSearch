@@ -103,6 +103,7 @@ import org.opensearch.common.lifecycle.LifecycleComponent;
 import org.opensearch.common.logging.DeprecationLogger;
 import org.opensearch.common.logging.HeaderWarning;
 import org.opensearch.common.logging.NodeAndClusterIdStateListener;
+import org.opensearch.common.logging.XOpaqueIdProvider;
 import org.opensearch.common.network.NetworkAddress;
 import org.opensearch.common.network.NetworkModule;
 import org.opensearch.common.network.NetworkService;
@@ -623,8 +624,10 @@ public class Node implements Closeable {
             resourcesToClose.add(() -> ThreadPool.terminate(threadPool, 10, TimeUnit.SECONDS));
             final ResourceWatcherService resourceWatcherService = new ResourceWatcherService(settings, threadPool);
             resourcesToClose.add(resourceWatcherService);
-            // adds the context to the DeprecationLogger so that it does not need to be injected everywhere
+            // adds the ThreadContext to access request/response headers without explicit injection
             HeaderWarning.setThreadContext(threadPool.getThreadContext());
+            // set up XOpaqueIdProvider to use HeaderWarning's X-Opaque-Id retrieval for DeprecationLogger
+            XOpaqueIdProvider.setXOpaqueIdSupplier(HeaderWarning::getXOpaqueId);
             resourcesToClose.add(() -> HeaderWarning.removeThreadContext(threadPool.getThreadContext()));
 
             final List<Setting<?>> additionalSettings = new ArrayList<>();
