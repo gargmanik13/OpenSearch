@@ -30,15 +30,13 @@
  * GitHub history for details.
  */
 
-package org.opensearch.cluster.metadata;
+package org.opensearch.cluster.metadata.core;
 
 import org.opensearch.cluster.Diff;
-import org.opensearch.cluster.metadata.core.AbstractMappingMetadata;
 import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
-import org.opensearch.index.mapper.DocumentMapper;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -51,18 +49,9 @@ import static org.opensearch.cluster.metadata.MetadataUtils.SINGLE_MAPPING_NAME;
  *
  * @opensearch.api
  */
-@PublicApi(since = "1.0.0")
+@PublicApi(since = "3.2.0")
 public class MappingMetadata extends AbstractMappingMetadata {
     public static final MappingMetadata EMPTY_MAPPINGS = new MappingMetadata(SINGLE_MAPPING_NAME, Collections.emptyMap());
-
-    /**
-     * @deprecated use {@link MappingMetadata#MappingMetadata(String, CompressedXContent, Boolean)} instead
-     * @param docMapper Instance of document mapper
-     */
-    @Deprecated
-    public MappingMetadata(DocumentMapper docMapper) {
-        super(docMapper.type(), docMapper.mappingSource(), docMapper.routingFieldMapper().required());
-    }
 
     public MappingMetadata(String type, CompressedXContent mappingSource, Boolean routingRequired) {
         super(type, mappingSource, routingRequired);

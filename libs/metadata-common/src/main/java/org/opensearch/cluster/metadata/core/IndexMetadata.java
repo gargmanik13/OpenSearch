@@ -30,188 +30,43 @@
  * GitHub history for details.
  */
 
-package org.opensearch.cluster.metadata;
+package org.opensearch.cluster.metadata.core;
 
 import org.opensearch.Version;
 import org.opensearch.action.admin.indices.rollover.RolloverInfo;
-import org.opensearch.action.support.ActiveShardCount;
+import org.opensearch.action.support.ShardCount;
 import org.opensearch.cluster.Diff;
-import org.opensearch.cluster.block.ClusterBlock;
-import org.opensearch.cluster.metadata.core.AbstractIndexMetadata;
-import org.opensearch.cluster.metadata.core.AbstractMappingMetadata;
+import org.opensearch.cluster.metadata.AliasMetadata;
+import org.opensearch.cluster.metadata.Context;
+import org.opensearch.cluster.metadata.DiffableStringMap;
+import org.opensearch.cluster.metadata.IngestionStatus;
 import org.opensearch.cluster.node.DiscoveryNodeFilters;
-import org.opensearch.common.Nullable;
 import org.opensearch.common.annotation.PublicApi;
-import org.opensearch.common.settings.Setting;
-import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentHelper;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
-import org.opensearch.core.common.io.stream.Writeable;
 import org.opensearch.core.index.Index;
-import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.core.xcontent.ToXContent;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.gateway.MetadataStateFormat;
-import org.opensearch.index.mapper.MapperService;
 
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import static org.opensearch.cluster.metadata.MetadataUtils.SINGLE_MAPPING_NAME;
+
 /**
  * Index metadata information
  *
  * @opensearch.api
  */
-@PublicApi(since = "1.0.0")
+@PublicApi(since = "3.2.0")
 public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
-
-    /**
-     * The state of the index.
-     *
-     * @opensearch.api
-     */
-    @PublicApi(since = "1.0.0")
-    public enum State {
-        OPEN((byte) 0),
-        CLOSE((byte) 1);
-
-        private final byte id;
-
-        State(byte id) {
-            this.id = id;
-        }
-
-        public byte id() {
-            return this.id;
-        }
-
-        public static State fromId(byte id) {
-            if (id == 0) {
-                return OPEN;
-            } else if (id == 1) {
-                return CLOSE;
-            }
-            throw new IllegalStateException("No state match for id [" + id + "]");
-        }
-
-        public static State fromString(String state) {
-            if ("open".equals(state)) {
-                return OPEN;
-            } else if ("close".equals(state)) {
-                return CLOSE;
-            }
-            throw new IllegalStateException("No state match for [" + state + "]");
-        }
-    }
-
-    /**
-     * @deprecated use {@link AutoExpandReplicas#SETTING_AUTO_EXPAND_REPLICAS} instead
-     */
-    @Deprecated
-    public static final String SETTING_AUTO_EXPAND_REPLICAS = "index.auto_expand_replicas";
-
-    /**
-     * @deprecated use {@link AutoExpandSearchReplicas#SETTING_AUTO_EXPAND_SEARCH_REPLICAS} instead
-     */
-    @Deprecated
-    public static final String SETTING_AUTO_EXPAND_SEARCH_REPLICAS = "index.auto_expand_search_replicas";
-
-    /**
-     * @deprecated use {@link AutoExpandReplicas#INDEX_AUTO_EXPAND_REPLICAS_SETTING} instead
-     */
-    @Deprecated
-    public static final Setting<AutoExpandReplicas> INDEX_AUTO_EXPAND_REPLICAS_SETTING = AutoExpandReplicas.SETTING;
-
-    /**
-     * @deprecated use {@link AutoExpandSearchReplicas#INDEX_AUTO_EXPAND_SEARCH_REPLICAS_SETTING} instead
-     */
-    @Deprecated
-    public static final Setting<AutoExpandSearchReplicas> INDEX_AUTO_EXPAND_SEARCH_REPLICAS_SETTING = AutoExpandSearchReplicas.SETTING;
-
-    /**
-     * Blocks the API.
-     *
-     * @opensearch.api
-     */
-    @PublicApi(since = "1.0.0")
-    public enum APIBlock implements Writeable {
-        READ_ONLY("read_only", INDEX_READ_ONLY_BLOCK),
-        READ("read", INDEX_READ_BLOCK),
-        WRITE("write", INDEX_WRITE_BLOCK),
-        METADATA("metadata", INDEX_METADATA_BLOCK),
-        READ_ONLY_ALLOW_DELETE("read_only_allow_delete", INDEX_READ_ONLY_ALLOW_DELETE_BLOCK),
-        SEARCH_ONLY("search_only", INDEX_SEARCH_ONLY_BLOCK);
-
-        final String name;
-        final String settingName;
-        final Setting<Boolean> setting;
-        final ClusterBlock block;
-
-        APIBlock(String name, ClusterBlock block) {
-            this.name = name;
-            this.settingName = "index.blocks." + name;
-            this.setting = Setting.boolSetting(settingName, false, Property.Dynamic, Property.IndexScope);
-            this.block = block;
-        }
-
-        public String settingName() {
-            return settingName;
-        }
-
-        public Setting<Boolean> setting() {
-            return setting;
-        }
-
-        public ClusterBlock getBlock() {
-            return block;
-        }
-
-        public static APIBlock fromName(String name) {
-            for (APIBlock block : APIBlock.values()) {
-                if (block.name.equals(name)) {
-                    return block;
-                }
-            }
-            throw new IllegalArgumentException("No block found with name " + name);
-        }
-
-        public static APIBlock fromSetting(String settingName) {
-            for (APIBlock block : APIBlock.values()) {
-                if (block.settingName.equals(settingName)) {
-                    return block;
-                }
-            }
-            throw new IllegalArgumentException("No block found with setting name " + settingName);
-        }
-
-        @Override
-        public void writeTo(StreamOutput out) throws IOException {
-            out.writeVInt(ordinal());
-        }
-
-        public static APIBlock readFrom(StreamInput input) throws IOException {
-            return APIBlock.values()[input.readVInt()];
-        }
-    }
-
-    /**
-     * The number of active shard copies to check for before proceeding with a write operation.
-     * @deprecated use {@link AbstractIndexMetadata#SETTING_WAIT_FOR_ACTIVE_SHARDS} instead
-     */
-    @Deprecated
-    public static final Setting<ActiveShardCount> SETTING_WAIT_FOR_ACTIVE_SHARDS = new Setting<>(
-        "index.write.wait_for_active_shards",
-        "1",
-        ActiveShardCount::parseString,
-        Setting.Property.Dynamic,
-        Setting.Property.IndexScope
-    );
 
     private IndexMetadata(
         final Index index,
@@ -237,7 +92,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
         final Version indexUpgradedVersion,
         final int routingNumShards,
         final int routingPartitionSize,
-        final ActiveShardCount waitForActiveShards,
+        final ShardCount waitForActiveShards,
         final Map<String, RolloverInfo> rolloverInfos,
         final boolean isSystem,
         final int indexTotalShardsPerNodeLimit,
@@ -253,7 +108,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
             settingsVersion,
             aliasesVersion,
             primaryTerms,
-            AbstractIndexMetadata.State.fromId(state.id),
+            state,
             numberOfShards,
             numberOfReplicas,
             numberOfSearchOnlyReplicas,
@@ -279,41 +134,6 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
             context,
             ingestionStatus
         );
-    }
-
-    private static MappingMetadata getMappingMetadata(AbstractMappingMetadata abstractMappingMetadata) {
-        if (abstractMappingMetadata instanceof MappingMetadata) {
-            return (MappingMetadata) abstractMappingMetadata;
-        }
-
-        return new MappingMetadata(
-            abstractMappingMetadata.type(),
-            abstractMappingMetadata.source(),
-            abstractMappingMetadata.routingRequired()
-        );
-    }
-
-    public State getState() {
-        return State.fromId(state.id());
-    }
-
-    /**
-     * Returns the configured {@link #SETTING_WAIT_FOR_ACTIVE_SHARDS}, which defaults
-     * to an active shard count of 1 if not specified.
-     */
-    public ActiveShardCount getWaitForActiveShards() {
-        return ActiveShardCount.from(waitForActiveShards.getValue());
-    }
-
-    /**
-     * Return the concrete mapping for this index or {@code null} if this index has no mappings at all.
-     */
-    @Nullable
-    public MappingMetadata mapping() {
-        for (AbstractMappingMetadata cursor : mappings.values()) {
-            return getMappingMetadata(cursor);
-        }
-        return null;
     }
 
     public Diff<IndexMetadata> diff(IndexMetadata previousState) {
@@ -385,7 +205,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
      *
      * @opensearch.api
      */
-    @PublicApi(since = "1.0.0")
+    @PublicApi(since = "3.2.0")
     public static class Builder extends AbstractIndexMetadata.Builder {
 
         public Builder(String index) {
@@ -448,21 +268,21 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
             return this;
         }
 
-        public MappingMetadata mapping() {
-            return getMappingMetadata(mappings.get(MapperService.SINGLE_MAPPING_NAME));
+        public AbstractMappingMetadata mapping() {
+            return mappings.get(SINGLE_MAPPING_NAME);
         }
 
         public Builder putMapping(String source) throws IOException {
             putMapping(
-                new MappingMetadata(
-                    MapperService.SINGLE_MAPPING_NAME,
+                new AbstractMappingMetadata(
+                    SINGLE_MAPPING_NAME,
                     XContentHelper.convertToMap(MediaTypeRegistry.xContent(source).xContent(), source, true)
                 )
             );
             return this;
         }
 
-        public Builder putMapping(MappingMetadata mappingMd) {
+        public Builder putMapping(AbstractMappingMetadata mappingMd) {
             mappings.clear();
             if (mappingMd != null) {
                 mappings.put(mappingMd.type(), mappingMd);
@@ -471,7 +291,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
         }
 
         public Builder state(State state) {
-            this.state = AbstractIndexMetadata.State.fromId(state.id);
+            this.state = state;
             return this;
         }
 
@@ -567,7 +387,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
                 base.getSettingsVersion(),
                 base.getAliasesVersion(),
                 base.getPrimaryTerms(),
-                State.fromId(base.getIndexState().id()),
+                base.getIndexState(),
                 base.getNumberOfShards(),
                 base.getNumberOfReplicas(),
                 base.getNumberOfSearchOnlyReplicas(),
@@ -584,7 +404,7 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
                 base.getUpgradedVersion(),
                 base.getRoutingNumShards(),
                 base.getRoutingPartitionSize(),
-                ActiveShardCount.from(base.getWaitForActiveShards().getValue()),
+                base.getWaitForActiveShards(),
                 base.getRolloverInfos(),
                 base.isSystem(),
                 base.getIndexTotalShardsPerNodeLimit(),
@@ -620,47 +440,4 @@ public class IndexMetadata extends AbstractIndexMetadata<IndexMetadata> {
             return Builder.fromXContent(parser);
         }
     };
-
-    /**
-     * Returns the source shard ID to split the given target shard off
-     * @param shardId the id of the target shard to split into
-     * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
-     * @return a the source shard ID to split off from
-     */
-    public static ShardId selectSplitShard(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
-        return AbstractIndexMetadata.selectSplitShard(shardId, sourceIndexMetadata, numTargetShards);
-    }
-
-    /**
-     * Returns the source shard ID to clone the given target shard off
-     * @param shardId the id of the target shard to clone into
-     * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
-     * @return a the source shard ID to clone from
-     */
-    public static ShardId selectCloneShard(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
-        return AbstractIndexMetadata.selectCloneShard(shardId, sourceIndexMetadata, numTargetShards);
-    }
-
-    /**
-     * Selects the source shards for a local shard recovery. This might either be a split or a shrink operation.
-     * @param shardId the target shard ID to select the source shards for
-     * @param sourceIndexMetadata the source metadata
-     * @param numTargetShards the number of target shards
-     */
-    public static Set<ShardId> selectRecoverFromShards(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
-        return AbstractIndexMetadata.selectRecoverFromShards(shardId, sourceIndexMetadata, numTargetShards);
-    }
-
-    /**
-     * Returns the source shard ids to shrink into the given shard id.
-     * @param shardId the id of the target shard to shrink to
-     * @param sourceIndexMetadata the source index metadata
-     * @param numTargetShards the total number of shards in the target index
-     * @return a set of shard IDs to shrink into the given shard ID.
-     */
-    public static Set<ShardId> selectShrinkShards(int shardId, IndexMetadata sourceIndexMetadata, int numTargetShards) {
-        return AbstractIndexMetadata.selectShrinkShards(shardId, sourceIndexMetadata, numTargetShards);
-    }
 }
