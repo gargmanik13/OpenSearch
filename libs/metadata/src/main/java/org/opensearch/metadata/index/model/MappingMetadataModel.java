@@ -9,13 +9,20 @@
 package org.opensearch.metadata.index.model;
 
 import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.common.xcontent.json.JsonXContent;
+import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.metadata.compress.CompressedData;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.Objects;
+import java.util.zip.CRC32;
 
 /**
  * Pure data holder class for mapping metadata without dependencies on OpenSearch server packages.
@@ -24,7 +31,10 @@ import java.util.Objects;
  * MappingMetadataModel stores all essential properties of a mapping.
  */
 @ExperimentalApi
-public final class MappingMetadataModel implements Writeable {
+public final class MappingMetadataModel implements Writeable, ToXContentFragment {
+
+    private static final String ROUTING_FIELD = "_routing";
+    private static final String REQUIRED_FIELD = "required";
 
     private final String type;
     private final CompressedData source;
@@ -123,5 +133,102 @@ public final class MappingMetadataModel implements Writeable {
     @Override
     public int hashCode() {
         return Objects.hash(type, source, routingRequired);
+    }
+
+    /**
+     * Parses a MappingMetadataModel from XContent.
+     * Expects the parser to be positioned at the mapping type field name.
+     * The mapping type is taken from parser.currentName().
+     * <p>
+     * Expected format: { "type_name": { ... mapping content ... } }
+     *
+     * @param parser the XContent parser
+     * @return the parsed MappingMetadataModel
+     * @throws IOException if parsing fails
+     */
+    public static MappingMetadataModel fromXContent(XContentParser parser) throws IOException {
+        String mappingType = parser.currentName();
+
+        // Move to START_OBJECT of the mapping content
+        XContentParser.Token token = parser.nextToken();
+        if (token != XContentParser.Token.START_OBJECT) {
+            throw new IllegalArgumentException("Expected START_OBJECT but got " + token);
+        }
+
+        // Parse the mapping content as a map
+        Map<String, Object> mappingContent = parser.mapOrdered();
+
+        // Determine if routing is required
+        boolean routingRequired = isRoutingRequired(mappingContent);
+
+        // Wrap the mapping content with the type name for storage
+        // The source format is: { "type_name": { ... content ... } }
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        builder.startObject();
+        builder.field(mappingType);
+        builder.map(mappingContent);
+        builder.endObject();
+
+        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        CRC32 crc32 = new CRC32();
+        crc32.update(bytes);
+        CompressedData source = new CompressedData(bytes, (int) crc32.getValue());
+
+        return new MappingMetadataModel(mappingType, source, routingRequired);
+    }
+
+    /**
+     * Determines if routing is required from the mapping content.
+     */
+    @SuppressWarnings("unchecked")
+    private static boolean isRoutingRequired(Map<String, Object> mappingContent) {
+        if (mappingContent.containsKey(ROUTING_FIELD)) {
+            Object routingNode = mappingContent.get(ROUTING_FIELD);
+            if (routingNode instanceof Map) {
+                Map<String, Object> routingMap = (Map<String, Object>) routingNode;
+                Object requiredValue = routingMap.get(REQUIRED_FIELD);
+                if (requiredValue instanceof Boolean) {
+                    return (Boolean) requiredValue;
+                } else if (requiredValue instanceof String) {
+                    return Boolean.parseBoolean((String) requiredValue);
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Writes this MappingMetadataModel to XContent.
+     * Outputs the mapping type as a field name with the mapping content as its value.
+     * <p>
+     * Output format: "type_name": { ... mapping content ... }
+     *
+     * @param builder the XContent builder
+     * @param params the ToXContent params
+     * @return the XContent builder
+     * @throws IOException if writing fails
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+        // Parse the source bytes to get the mapping content
+        try (XContentParser sourceParser = JsonXContent.jsonXContent.createParser(null, null, source.compressedBytes())) {
+            sourceParser.nextToken(); // START_OBJECT
+
+            Map<String, Object> sourceMap = sourceParser.mapOrdered();
+
+            // The source is stored as { "type_name": { ... content ... } }
+            // We need to extract the content and write it
+            Map<String, Object> mappingContent;
+            if (sourceMap.size() == 1 && sourceMap.containsKey(type)) {
+                mappingContent = (Map<String, Object>) sourceMap.get(type);
+            } else {
+                mappingContent = sourceMap;
+            }
+
+            builder.field(type);
+            builder.map(mappingContent);
+        }
+        return builder;
     }
 }

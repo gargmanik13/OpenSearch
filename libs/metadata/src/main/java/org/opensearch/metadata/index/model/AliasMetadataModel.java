@@ -11,16 +11,24 @@ package org.opensearch.metadata.index.model;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.common.util.set.Sets;
+import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.core.common.Strings;
+import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.xcontent.ToXContent;
+import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.metadata.compress.CompressedData;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.zip.CRC32;
 
 /**
  * Pure data holder class for alias metadata without dependencies on OpenSearch server packages.
@@ -29,7 +37,14 @@ import java.util.Set;
  * AliasMetadataModel stores all essential properties of an alias.
  */
 @ExperimentalApi
-public final class AliasMetadataModel implements Writeable {
+public final class AliasMetadataModel implements Writeable, ToXContentFragment {
+
+    private static final String FILTER_FIELD = "filter";
+    private static final String INDEX_ROUTING_FIELD = "index_routing";
+    private static final String SEARCH_ROUTING_FIELD = "search_routing";
+    private static final String ROUTING_FIELD = "routing";
+    private static final String IS_WRITE_INDEX_FIELD = "is_write_index";
+    private static final String IS_HIDDEN_FIELD = "is_hidden";
 
     private final String alias;
     private final CompressedData filter;
@@ -269,6 +284,20 @@ public final class AliasMetadataModel implements Writeable {
         }
 
         /**
+         * Creates a new builder from an existing {@link AliasMetadataModel}.
+         *
+         * @param model the model to copy from
+         */
+        public Builder(AliasMetadataModel model) {
+            this.alias = model.alias();
+            this.filter = model.filter();
+            this.indexRouting = model.indexRouting();
+            this.searchRouting = model.searchRouting();
+            this.writeIndex = model.writeIndex();
+            this.isHidden = model.isHidden();
+        }
+
+        /**
          * Returns the alias name from builder.
          *
          * @return the alias name
@@ -352,5 +381,160 @@ public final class AliasMetadataModel implements Writeable {
         public AliasMetadataModel build() {
             return new AliasMetadataModel(alias, filter, indexRouting, searchRouting, writeIndex, isHidden);
         }
+
+        /**
+         * Parses an AliasMetadataModel from XContent, handling all input formats including
+         * binary embedded objects, camelCase field names, and string-encoded filters.
+         * <p>
+         * This method matches the parsing behavior of {@code AliasMetadata.Builder.fromXContent()}
+         * in the server module, enabling the model layer to fully replace server-side parsing.
+         * <p>
+         * Expects the parser to be positioned at the alias name field.
+         *
+         * @param parser the XContent parser
+         * @return the parsed AliasMetadataModel
+         * @throws IOException if parsing fails
+         */
+        public static AliasMetadataModel fromXContent(XContentParser parser) throws IOException {
+            Builder builder = new Builder(parser.currentName());
+
+            String currentFieldName = null;
+            XContentParser.Token token = parser.nextToken();
+            if (token == null) {
+                return builder.build();
+            }
+            while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                if (token == XContentParser.Token.FIELD_NAME) {
+                    currentFieldName = parser.currentName();
+                } else if (token == XContentParser.Token.START_OBJECT) {
+                    if (FILTER_FIELD.equals(currentFieldName)) {
+                        Map<String, Object> filterMap = parser.mapOrdered();
+                        builder.filter(mapToCompressedData(filterMap));
+                    } else {
+                        parser.skipChildren();
+                    }
+                } else if (token == XContentParser.Token.VALUE_EMBEDDED_OBJECT) {
+                    if (FILTER_FIELD.equals(currentFieldName)) {
+                        builder.filter(binaryToCompressedData(parser.binaryValue()));
+                    }
+                } else if (token == XContentParser.Token.VALUE_STRING) {
+                    if (ROUTING_FIELD.equals(currentFieldName)) {
+                        builder.routing(parser.text());
+                    } else if (INDEX_ROUTING_FIELD.equals(currentFieldName) || "indexRouting".equals(currentFieldName)) {
+                        builder.indexRouting(parser.text());
+                    } else if (SEARCH_ROUTING_FIELD.equals(currentFieldName) || "searchRouting".equals(currentFieldName)) {
+                        builder.searchRouting(parser.text());
+                    } else if (FILTER_FIELD.equals(currentFieldName)) {
+                        builder.filter(binaryToCompressedData(parser.binaryValue()));
+                    }
+                } else if (token == XContentParser.Token.START_ARRAY) {
+                    parser.skipChildren();
+                } else if (token == XContentParser.Token.VALUE_BOOLEAN) {
+                    if (IS_WRITE_INDEX_FIELD.equals(currentFieldName)) {
+                        builder.writeIndex(parser.booleanValue());
+                    } else if (IS_HIDDEN_FIELD.equals(currentFieldName)) {
+                        builder.isHidden(parser.booleanValue());
+                    }
+                }
+            }
+            return builder.build();
+        }
+
+        /**
+         * Writes an AliasMetadataModel to XContent.
+         * The alias name is used as the object key, and all non-null fields are written.
+         *
+         * @param model the AliasMetadataModel to write
+         * @param builder the XContent builder
+         * @param params the ToXContent params
+         * @throws IOException if writing fails
+         */
+        public static void toXContent(AliasMetadataModel model, XContentBuilder builder, ToXContent.Params params) throws IOException {
+            builder.startObject(model.alias());
+
+            if (model.filter() != null) {
+                try (XContentParser filterParser = JsonXContent.jsonXContent.createParser(null, null, model.filter().compressedBytes())) {
+                    filterParser.nextToken();
+                    builder.field(FILTER_FIELD, filterParser.map());
+                }
+            }
+
+            if (model.indexRouting() != null) {
+                builder.field(INDEX_ROUTING_FIELD, model.indexRouting());
+            }
+
+            if (model.searchRouting() != null) {
+                builder.field(SEARCH_ROUTING_FIELD, model.searchRouting());
+            }
+
+            if (model.writeIndex() != null) {
+                builder.field(IS_WRITE_INDEX_FIELD, model.writeIndex());
+            }
+
+            if (model.isHidden() != null) {
+                builder.field(IS_HIDDEN_FIELD, model.isHidden());
+            }
+
+            builder.endObject();
+        }
+    }
+
+    /**
+     * Parses an AliasMetadataModel from XContent.
+     * Delegates to {@link Builder#fromXContent(XContentParser)}.
+     *
+     * @param parser the XContent parser positioned at the alias name field
+     * @return the parsed AliasMetadataModel
+     * @throws IOException if parsing fails
+     */
+    public static AliasMetadataModel fromXContent(XContentParser parser) throws IOException {
+        return Builder.fromXContent(parser);
+    }
+
+    /**
+     * Converts a map to CompressedData by serializing to JSON.
+     * The data is stored uncompressed for simplicity.
+     */
+    private static CompressedData mapToCompressedData(Map<String, Object> map) throws IOException {
+        if (map == null || map.isEmpty()) {
+            return null;
+        }
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        builder.map(map);
+        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        CRC32 crc32 = new CRC32();
+        crc32.update(bytes);
+        return new CompressedData(bytes, (int) crc32.getValue());
+    }
+
+    /**
+     * Creates CompressedData from raw binary bytes (e.g., from VALUE_EMBEDDED_OBJECT or VALUE_STRING binary tokens).
+     * Computes a CRC32 checksum from the provided bytes.
+     *
+     * @param bytes the binary data
+     * @return a new CompressedData instance, or null if bytes is null or empty
+     */
+    private static CompressedData binaryToCompressedData(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        CRC32 crc32 = new CRC32();
+        crc32.update(bytes);
+        return new CompressedData(bytes, (int) crc32.getValue());
+    }
+
+    /**
+     * Writes this AliasMetadataModel to XContent.
+     * Delegates to {@link Builder#toXContent(AliasMetadataModel, XContentBuilder, ToXContent.Params)}.
+     *
+     * @param builder the XContent builder
+     * @param params the ToXContent params
+     * @return the XContent builder
+     * @throws IOException if writing fails
+     */
+    @Override
+    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+        Builder.toXContent(this, builder, params);
+        return builder;
     }
 }

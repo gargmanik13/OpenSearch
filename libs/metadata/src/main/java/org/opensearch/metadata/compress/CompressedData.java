@@ -9,13 +9,17 @@
 package org.opensearch.metadata.compress;
 
 import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
+import org.opensearch.core.compress.Compressor;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.zip.CRC32;
 
 /**
  * Generic data holder class for compressed data.
@@ -77,6 +81,48 @@ public final class CompressedData implements Writeable {
     public void writeTo(StreamOutput out) throws IOException {
         out.writeInt(checksum);
         out.writeByteArray(compressedBytes);
+    }
+
+    /**
+     * Decompresses the data and returns as bytes.
+     *
+     * @param compressor the compressor to use for decompression
+     * @return uncompressed bytes
+     * @throws IOException if decompression fails
+     */
+    public byte[] uncompressed(Compressor compressor) throws IOException {
+        Objects.requireNonNull(compressor, "compressor must not be null");
+        BytesReference compressed = new BytesArray(compressedBytes);
+        BytesReference uncompressed = compressor.uncompress(compressed);
+        return BytesReference.toBytes(uncompressed);
+    }
+
+    /**
+     * Creates CompressedData from uncompressed bytes.
+     *
+     * @param uncompressed the uncompressed bytes
+     * @param compressor   the compressor to use
+     * @return new CompressedData instance
+     * @throws IOException if compression fails
+     */
+    public static CompressedData compress(byte[] uncompressed, Compressor compressor) throws IOException {
+        Objects.requireNonNull(uncompressed, "uncompressed must not be null");
+        Objects.requireNonNull(compressor, "compressor must not be null");
+        BytesReference compressed = compressor.compress(new BytesArray(uncompressed));
+        int checksum = computeCRC32Checksum(uncompressed);
+        return new CompressedData(BytesReference.toBytes(compressed), checksum);
+    }
+
+    /**
+     * Computes CRC32 checksum for the given data.
+     *
+     * @param data the data to compute checksum for
+     * @return the CRC32 checksum as an int
+     */
+    private static int computeCRC32Checksum(byte[] data) {
+        CRC32 crc32 = new CRC32();
+        crc32.update(data);
+        return (int) crc32.getValue();
     }
 
     @Override

@@ -12,12 +12,14 @@ import org.opensearch.core.common.io.stream.InputStreamStreamInput;
 import org.opensearch.core.common.io.stream.OutputStreamStreamOutput;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
+import org.opensearch.core.compress.NoneCompressor;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Random;
+import java.util.zip.CRC32;
 
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
@@ -125,5 +127,70 @@ public class CompressedDataTests extends OpenSearchTestCase {
 
     private static CompressedData createTestItem() {
         return new CompressedData(randomByteArrayOfLength(randomIntBetween(10, 100)), randomInt());
+    }
+
+    public void testCompressAndUncompressRoundTrip() throws IOException {
+        NoneCompressor compressor = new NoneCompressor();
+        byte[] originalData = "This is test data for compression round-trip".getBytes();
+
+        // Compress the data
+        CompressedData compressed = CompressedData.compress(originalData, compressor);
+
+        // Verify checksum is computed correctly
+        CRC32 crc32 = new CRC32();
+        crc32.update(originalData);
+        int expectedChecksum = (int) crc32.getValue();
+        assertThat(compressed.checksum(), equalTo(expectedChecksum));
+
+        // Uncompress and verify data matches
+        byte[] uncompressed = compressed.uncompressed(compressor);
+        assertArrayEquals(originalData, uncompressed);
+    }
+
+    public void testCompressAndUncompressWithRandomData() throws IOException {
+        NoneCompressor compressor = new NoneCompressor();
+        Random r = random();
+
+        for (int i = 0; i < 50; i++) {
+            byte[] originalData = randomByteArrayOfLength(r.nextInt(1000) + 1);
+
+            // Compress the data
+            CompressedData compressed = CompressedData.compress(originalData, compressor);
+
+            // Uncompress and verify data matches
+            byte[] uncompressed = compressed.uncompressed(compressor);
+            assertArrayEquals(originalData, uncompressed);
+
+            // Verify checksum
+            CRC32 crc32 = new CRC32();
+            crc32.update(originalData);
+            int expectedChecksum = (int) crc32.getValue();
+            assertThat(compressed.checksum(), equalTo(expectedChecksum));
+        }
+    }
+
+    public void testCompressNullDataThrowsException() {
+        NoneCompressor compressor = new NoneCompressor();
+        expectThrows(NullPointerException.class, () -> CompressedData.compress(null, compressor));
+    }
+
+    public void testCompressNullCompressorThrowsException() {
+        byte[] data = "test".getBytes();
+        expectThrows(NullPointerException.class, () -> CompressedData.compress(data, null));
+    }
+
+    public void testUncompressedNullCompressorThrowsException() {
+        CompressedData data = new CompressedData(new byte[] { 1, 2, 3 }, 100);
+        expectThrows(NullPointerException.class, () -> data.uncompressed(null));
+    }
+
+    public void testCompressEmptyData() throws IOException {
+        NoneCompressor compressor = new NoneCompressor();
+        byte[] emptyData = new byte[0];
+
+        CompressedData compressed = CompressedData.compress(emptyData, compressor);
+        byte[] uncompressed = compressed.uncompressed(compressor);
+
+        assertArrayEquals(emptyData, uncompressed);
     }
 }
