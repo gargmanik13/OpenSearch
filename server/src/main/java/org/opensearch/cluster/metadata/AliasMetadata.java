@@ -272,79 +272,11 @@ public class AliasMetadata extends AbstractDiffable<AliasMetadata> implements To
         }
 
         public static void toXContent(AliasMetadata aliasMetadata, XContentBuilder builder, ToXContent.Params params) throws IOException {
-            builder.startObject(aliasMetadata.alias());
-
-            boolean binary = params.paramAsBoolean("binary", false);
-
-            if (aliasMetadata.filter() != null) {
-                if (binary) {
-                    builder.field("filter", aliasMetadata.filter().compressed());
-                } else {
-                    builder.field("filter", XContentHelper.convertToMap(aliasMetadata.filter().uncompressed(), true).v2());
-                }
-            }
-            if (aliasMetadata.indexRouting() != null) {
-                builder.field("index_routing", aliasMetadata.indexRouting());
-            }
-            if (aliasMetadata.searchRouting() != null) {
-                builder.field("search_routing", aliasMetadata.searchRouting());
-            }
-
-            if (aliasMetadata.writeIndex() != null) {
-                builder.field("is_write_index", aliasMetadata.writeIndex());
-            }
-
-            if (aliasMetadata.isHidden() != null) {
-                builder.field("is_hidden", aliasMetadata.isHidden());
-            }
-
-            builder.endObject();
+            aliasMetadata.model().toXContent(builder, params);
         }
 
         public static AliasMetadata fromXContent(XContentParser parser) throws IOException {
-            Builder builder = new Builder(parser.currentName());
-
-            String currentFieldName = null;
-            XContentParser.Token token = parser.nextToken();
-            if (token == null) {
-                // no data...
-                return builder.build();
-            }
-            while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
-                if (token == XContentParser.Token.FIELD_NAME) {
-                    currentFieldName = parser.currentName();
-                } else if (token == XContentParser.Token.START_OBJECT) {
-                    if ("filter".equals(currentFieldName)) {
-                        Map<String, Object> filter = parser.mapOrdered();
-                        builder.filter(filter);
-                    } else {
-                        parser.skipChildren();
-                    }
-                } else if (token == XContentParser.Token.VALUE_EMBEDDED_OBJECT) {
-                    if ("filter".equals(currentFieldName)) {
-                        builder.filter(new CompressedXContent(parser.binaryValue()));
-                    }
-                } else if (token == XContentParser.Token.VALUE_STRING) {
-                    if ("routing".equals(currentFieldName)) {
-                        builder.routing(parser.text());
-                    } else if ("index_routing".equals(currentFieldName) || "indexRouting".equals(currentFieldName)) {
-                        builder.indexRouting(parser.text());
-                    } else if ("search_routing".equals(currentFieldName) || "searchRouting".equals(currentFieldName)) {
-                        builder.searchRouting(parser.text());
-                    } else if ("filter".equals(currentFieldName)) {
-                        builder.filter(new CompressedXContent(parser.binaryValue()));
-                    }
-                } else if (token == XContentParser.Token.START_ARRAY) {
-                    parser.skipChildren();
-                } else if (token == XContentParser.Token.VALUE_BOOLEAN) {
-                    if ("is_write_index".equals(currentFieldName)) {
-                        builder.writeIndex(parser.booleanValue());
-                    } else if ("is_hidden".equals(currentFieldName)) {
-                        builder.isHidden(parser.booleanValue());
-                    }
-                }
-            }
-            return builder.build();
+            return new AliasMetadata(AliasMetadataModel.fromXContent(parser));
         }
     }
 }

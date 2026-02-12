@@ -17,12 +17,12 @@ import org.opensearch.core.common.io.stream.Writeable;
 import org.opensearch.core.xcontent.ToXContentFragment;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.metadata.common.XContentContext;
 import org.opensearch.metadata.compress.CompressedData;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
-import java.util.zip.CRC32;
 
 /**
  * Pure data holder class for mapping metadata without dependencies on OpenSearch server packages.
@@ -169,10 +169,8 @@ public final class MappingMetadataModel implements Writeable, ToXContentFragment
         builder.map(mappingContent);
         builder.endObject();
 
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
-        CRC32 crc32 = new CRC32();
-        crc32.update(bytes);
-        CompressedData source = new CompressedData(bytes, (int) crc32.getValue());
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
+        CompressedData source = new CompressedData(bytes);
 
         return new MappingMetadataModel(mappingType, source, routingRequired);
     }
@@ -211,23 +209,33 @@ public final class MappingMetadataModel implements Writeable, ToXContentFragment
     @Override
     @SuppressWarnings("unchecked")
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        // Parse the source bytes to get the mapping content
-        try (XContentParser sourceParser = JsonXContent.jsonXContent.createParser(null, null, source.compressedBytes())) {
-            sourceParser.nextToken(); // START_OBJECT
+        boolean binary = params.paramAsBoolean("binary", false);
+        XContentContext xContentContext = XContentContext.valueOf(params.param(XContentContext.PARAM_KEY, XContentContext.API.name()));
 
-            Map<String, Object> sourceMap = sourceParser.mapOrdered();
-
-            // The source is stored as { "type_name": { ... content ... } }
-            // We need to extract the content and write it
-            Map<String, Object> mappingContent;
-            if (sourceMap.size() == 1 && sourceMap.containsKey(type)) {
-                mappingContent = (Map<String, Object>) sourceMap.get(type);
+        if (xContentContext != XContentContext.API) {
+            if (binary) {
+                builder.value(source.compressedBytes());
             } else {
-                mappingContent = sourceMap;
+                byte[] uncompressed = source.uncompressed();
+                try (XContentParser sourceParser = JsonXContent.jsonXContent.createParser(null, null, uncompressed)) {
+                    sourceParser.nextToken();
+                    builder.map(sourceParser.mapOrdered());
+                }
             }
-
-            builder.field(type);
-            builder.map(mappingContent);
+        } else {
+            byte[] uncompressed = source.uncompressed();
+            try (XContentParser sourceParser = JsonXContent.jsonXContent.createParser(null, null, uncompressed)) {
+                sourceParser.nextToken();
+                Map<String, Object> sourceMap = sourceParser.mapOrdered();
+                Map<String, Object> mappingContent;
+                if (sourceMap.size() == 1 && sourceMap.containsKey(type)) {
+                    mappingContent = (Map<String, Object>) sourceMap.get(type);
+                } else {
+                    mappingContent = sourceMap;
+                }
+                builder.field(type);
+                builder.map(mappingContent);
+            }
         }
         return builder;
     }

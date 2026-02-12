@@ -15,8 +15,10 @@ import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
 import org.opensearch.core.compress.Compressor;
+import org.opensearch.core.compress.CompressorRegistry;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.zip.CRC32;
@@ -44,6 +46,27 @@ public final class CompressedData implements Writeable {
         Objects.requireNonNull(compressedBytes, "compressedBytes must not be null");
         this.compressedBytes = Arrays.copyOf(compressedBytes, compressedBytes.length);
         this.checksum = checksum;
+    }
+
+    /**
+     * Creates a new CompressedData from bytes that may or may not be already compressed.
+     * Auto-detects compression. If already compressed, stores as-is and computes checksum
+     * from the decompressed content. If not compressed, compresses using the default compressor.
+     *
+     * @param data the bytes (compressed or uncompressed)
+     * @throws IOException if compression or decompression fails
+     */
+    public CompressedData(byte[] data) throws IOException {
+        Objects.requireNonNull(data, "data must not be null");
+        BytesReference ref = new BytesArray(data);
+        Compressor compressor = CompressorRegistry.defaultCompressor();
+        if (compressor.isCompressed(ref)) {
+            this.compressedBytes = Arrays.copyOf(data, data.length);
+            this.checksum = computeCRC32Checksum(BytesReference.toBytes(compressor.uncompress(ref)));
+        } else {
+            this.compressedBytes = BytesReference.toBytes(compressor.compress(ref));
+            this.checksum = computeCRC32Checksum(data);
+        }
     }
 
     /**
@@ -86,40 +109,29 @@ public final class CompressedData implements Writeable {
     /**
      * Decompresses the data and returns as bytes.
      *
-     * @param compressor the compressor to use for decompression
      * @return uncompressed bytes
-     * @throws IOException if decompression fails
      */
-    public byte[] uncompressed(Compressor compressor) throws IOException {
-        Objects.requireNonNull(compressor, "compressor must not be null");
-        BytesReference compressed = new BytesArray(compressedBytes);
-        BytesReference uncompressed = compressor.uncompress(compressed);
-        return BytesReference.toBytes(uncompressed);
+    public byte[] uncompressed() {
+        try {
+            return BytesReference.toBytes(CompressorRegistry.defaultCompressor().uncompress(new BytesArray(compressedBytes)));
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot decompress compressed data", e);
+        }
     }
 
     /**
-     * Creates CompressedData from uncompressed bytes.
-     *
-     * @param uncompressed the uncompressed bytes
-     * @param compressor   the compressor to use
-     * @return new CompressedData instance
-     * @throws IOException if compression fails
+     * Returns the compressed bytes as a {@link BytesReference}.
      */
-    public static CompressedData compress(byte[] uncompressed, Compressor compressor) throws IOException {
-        Objects.requireNonNull(uncompressed, "uncompressed must not be null");
-        Objects.requireNonNull(compressor, "compressor must not be null");
-        BytesReference compressed = compressor.compress(new BytesArray(uncompressed));
-        int checksum = computeCRC32Checksum(uncompressed);
-        return new CompressedData(BytesReference.toBytes(compressed), checksum);
+    public BytesReference compressedReference() {
+        return new BytesArray(compressedBytes);
     }
 
     /**
      * Computes CRC32 checksum for the given data.
      *
      * @param data the data to compute checksum for
-     * @return the CRC32 checksum as an int
      */
-    private static int computeCRC32Checksum(byte[] data) {
+    public static int computeCRC32Checksum(byte[] data) {
         CRC32 crc32 = new CRC32();
         crc32.update(data);
         return (int) crc32.getValue();
@@ -131,11 +143,26 @@ public final class CompressedData implements Writeable {
         if (o == null || getClass() != o.getClass()) return false;
 
         CompressedData that = (CompressedData) o;
-        return checksum == that.checksum && Arrays.equals(compressedBytes, that.compressedBytes);
+
+        if (Arrays.equals(compressedBytes, that.compressedBytes)) {
+            return true;
+        }
+
+        if (checksum != that.checksum) {
+            return false;
+        }
+
+        return Arrays.equals(uncompressed(), that.uncompressed());
     }
 
     @Override
     public int hashCode() {
         return checksum;
     }
+
+    @Override
+    public String toString() {
+        return new String(uncompressed(), StandardCharsets.UTF_8);
+    }
+
 }

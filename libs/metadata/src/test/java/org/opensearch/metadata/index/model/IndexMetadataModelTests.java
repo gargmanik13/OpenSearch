@@ -8,6 +8,7 @@
 
 package org.opensearch.metadata.index.model;
 
+import org.opensearch.Version;
 import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.common.io.stream.InputStreamStreamInput;
@@ -29,7 +30,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.zip.CRC32;
 
 import static org.hamcrest.Matchers.equalTo;
 
@@ -361,10 +361,7 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
 
     private static CompressedData createJsonMappingSource(String type, String content) throws IOException {
         String json = "{\"" + type + "\":" + content + "}";
-        byte[] bytes = json.getBytes();
-        CRC32 crc32 = new CRC32();
-        crc32.update(bytes);
-        return new CompressedData(bytes, (int) crc32.getValue());
+        return new CompressedData(json.getBytes());
     }
 
     public void testXContentRoundTrip() throws IOException {
@@ -379,10 +376,7 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
         MappingMetadataModel mapping = new MappingMetadataModel("_doc", mappingSource, false);
 
         // Create alias with valid JSON filter
-        byte[] filterBytes = "{\"term\":{\"user\":\"kimchy\"}}".getBytes();
-        CRC32 crc32 = new CRC32();
-        crc32.update(filterBytes);
-        CompressedData filter = new CompressedData(filterBytes, (int) crc32.getValue());
+        CompressedData filter = new CompressedData("{\"term\":{\"user\":\"kimchy\"}}".getBytes());
         AliasMetadataModel alias = new AliasMetadataModel.Builder("test-alias").filter(filter)
             .indexRouting("idx_route")
             .searchRouting("search_route")
@@ -419,7 +413,7 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -455,7 +449,7 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -484,7 +478,7 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -555,5 +549,254 @@ public class IndexMetadataModelTests extends OpenSearchTestCase {
             assertEquals(3, parsed.primaryTerms()[1]);
             assertEquals(7, parsed.primaryTerms()[2]);
         }
+    }
+
+    // Lambda writeTo/readFrom tests
+
+    public void testWriteToWithLambdaWriters() throws IOException {
+        IndexMetadataModel original = new IndexMetadataModel.Builder("lambda-test").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .build();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamOutput out = new OutputStreamStreamOutput(baos);
+        out.setVersion(Version.CURRENT);
+
+        // Write with lambda writers that write simple string maps
+        original.writeTo(out, o -> {
+            o.writeVInt(1); // 1 custom entry
+            o.writeString("my_key");
+            // Write with length prefix for SKIPPABLE_FIELDS_VERSION
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            StreamOutput bufOut = new OutputStreamStreamOutput(buf);
+            bufOut.writeString("my_value");
+            bufOut.close();
+            byte[] bytes = buf.toByteArray();
+            o.writeVInt(bytes.length);
+            o.writeBytes(bytes);
+        }, o -> {
+            o.writeVInt(1); // 1 rollover entry
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            StreamOutput bufOut = new OutputStreamStreamOutput(buf);
+            bufOut.writeString("rollover_data");
+            bufOut.close();
+            byte[] bytes = buf.toByteArray();
+            o.writeVInt(bytes.length);
+            o.writeBytes(bytes);
+        });
+        out.close();
+
+        // Read back with lambda readers
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        StreamInput in = new InputStreamStreamInput(bais);
+        in.setVersion(Version.CURRENT);
+
+        IndexMetadataModel parsed = new IndexMetadataModel(in, StreamInput::readString, StreamInput::readString, s -> "rollover_alias");
+
+        assertEquals("lambda-test", parsed.index());
+        assertNotNull(parsed.customData());
+        assertEquals(1, parsed.customData().size());
+        assertEquals("my_value", parsed.customData().get("my_key"));
+        assertNotNull(parsed.rolloverInfos());
+        assertEquals(1, parsed.rolloverInfos().size());
+        assertEquals("rollover_data", parsed.rolloverInfos().get("rollover_alias"));
+    }
+
+    public void testWriteToWithNullLambdasWritesZero() throws IOException {
+        IndexMetadataModel original = new IndexMetadataModel.Builder("null-lambda").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .build();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamOutput out = new OutputStreamStreamOutput(baos);
+        out.setVersion(Version.CURRENT);
+        original.writeTo(out, null, null);
+        out.close();
+
+        // Read back — should have 0 customData and 0 rolloverInfos
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        StreamInput in = new InputStreamStreamInput(bais);
+        in.setVersion(Version.CURRENT);
+        IndexMetadataModel parsed = new IndexMetadataModel(in);
+
+        assertEquals("null-lambda", parsed.index());
+        assertNull(parsed.customData());
+        assertNull(parsed.rolloverInfos());
+    }
+
+    // SKIPPABLE_FIELDS_VERSION skip logic test
+
+    public void testStreamSkipCustomDataAndRolloverInfos() throws IOException {
+        IndexMetadataModel original = new IndexMetadataModel.Builder("skip-test").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .system(true)
+            .build();
+
+        // Write with lambda writers that include data
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamOutput out = new OutputStreamStreamOutput(baos);
+        out.setVersion(Version.CURRENT);
+        original.writeTo(out, o -> {
+            o.writeVInt(2); // 2 custom entries
+            for (int i = 0; i < 2; i++) {
+                o.writeString("key" + i);
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                StreamOutput bufOut = new OutputStreamStreamOutput(buf);
+                bufOut.writeString("value" + i);
+                bufOut.close();
+                byte[] bytes = buf.toByteArray();
+                o.writeVInt(bytes.length);
+                o.writeBytes(bytes);
+            }
+        }, o -> {
+            o.writeVInt(1); // 1 rollover entry
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            StreamOutput bufOut = new OutputStreamStreamOutput(buf);
+            bufOut.writeString("rollover_data");
+            bufOut.close();
+            byte[] bytes = buf.toByteArray();
+            o.writeVInt(bytes.length);
+            o.writeBytes(bytes);
+        });
+        out.close();
+
+        // Read back with null readers — should skip customData and rolloverInfos
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        StreamInput in = new InputStreamStreamInput(bais);
+        in.setVersion(Version.CURRENT);
+        IndexMetadataModel parsed = new IndexMetadataModel(in, null, null, null);
+
+        assertEquals("skip-test", parsed.index());
+        assertTrue(parsed.isSystem());
+        assertNull(parsed.customData());
+        assertNull(parsed.rolloverInfos());
+    }
+
+    // Lambda toXContent test
+
+    public void testToXContentWithLambdaWriters() throws IOException {
+        Map<String, Object> settingsMap = new HashMap<>();
+        settingsMap.put("index.number_of_shards", "1");
+        IndexMetadataModel original = new IndexMetadataModel.Builder("xcontent-lambda").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .settings(new SettingsModel(settingsMap))
+            .build();
+
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        builder.startObject();
+        original.toXContent(builder, ToXContent.EMPTY_PARAMS, xb -> {
+            // Write a custom data entry
+            xb.startObject("my_custom");
+            xb.field("key1", "val1");
+            xb.endObject();
+        }, xb -> {
+            // Write a rollover info entry
+            xb.startObject("my_rollover");
+            xb.field("alias", "test_alias");
+            xb.endObject();
+        });
+        builder.endObject();
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
+
+        // Parse back with lambda parsers
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
+            IndexMetadataModel parsed = IndexMetadataModel.fromXContent(parser, (p, name) -> {
+                Map<String, Object> map = p.map();
+                return map;
+            }, (p, name) -> {
+                Map<String, Object> map = p.map();
+                return map;
+            });
+
+            assertEquals("xcontent-lambda", parsed.index());
+            assertNotNull(parsed.customData());
+            assertEquals(1, parsed.customData().size());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> custom = (Map<String, Object>) parsed.customData().get("my_custom");
+            assertEquals("val1", custom.get("key1"));
+            assertNotNull(parsed.rolloverInfos());
+            assertEquals(1, parsed.rolloverInfos().size());
+        }
+    }
+
+    public void testFromXContentSkipsCustomDataAndRolloverInfosWhenNullParsers() throws IOException {
+        // JSON with customData and rolloverInfos
+        String json = "{\"skip-xcontent\":{"
+            + "\"version\":1,"
+            + "\"mapping_version\":1,"
+            + "\"settings_version\":1,"
+            + "\"aliases_version\":1,"
+            + "\"routing_num_shards\":1,"
+            + "\"state\":\"open\","
+            + "\"settings\":{},"
+            + "\"mappings\":{},"
+            + "\"aliases\":{},"
+            + "\"primary_terms\":{},"
+            + "\"in_sync_allocations\":{},"
+            + "\"rollover_info\":{\"alias1\":{\"conditions\":{},\"met_conditions\":{},\"time\":123}},"
+            + "\"system\":false,"
+            + "\"my_custom_data\":{\"key\":\"value\"}"
+            + "}}";
+
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, json.getBytes())) {
+            // null parsers — should skip customData and rolloverInfos
+            IndexMetadataModel parsed = IndexMetadataModel.fromXContent(parser);
+            assertEquals("skip-xcontent", parsed.index());
+            assertNull(parsed.customData());
+            assertNull(parsed.rolloverInfos());
+        }
+    }
+
+    // Builder customData/rolloverInfos tests
+
+    public void testBuilderPutCustomDataAndRolloverInfo() {
+        IndexMetadataModel.Builder builder = new IndexMetadataModel.Builder("builder-custom").routingNumShards(1)
+            .primaryTerms(new long[] { 1 });
+
+        builder.putCustomData("custom1", "value1");
+        builder.putCustomData("custom2", "value2");
+        builder.putRolloverInfo("rollover1", "info1");
+
+        assertNotNull(builder.customData());
+        assertEquals(2, builder.customData().size());
+        assertEquals("value1", builder.customData().get("custom1"));
+        assertNotNull(builder.rolloverInfos());
+        assertEquals(1, builder.rolloverInfos().size());
+        assertEquals("info1", builder.rolloverInfos().get("rollover1"));
+
+        IndexMetadataModel model = builder.build();
+        assertNotNull(model.customData());
+        assertEquals(2, model.customData().size());
+        assertNotNull(model.rolloverInfos());
+        assertEquals(1, model.rolloverInfos().size());
+    }
+
+    // hashCode test
+
+    public void testHashCode() {
+        IndexMetadataModel model1 = new IndexMetadataModel.Builder("hash-test").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .system(true)
+            .build();
+
+        IndexMetadataModel model2 = new IndexMetadataModel.Builder("hash-test").version(1)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .system(true)
+            .build();
+
+        IndexMetadataModel model3 = new IndexMetadataModel.Builder("hash-test").version(2)
+            .routingNumShards(1)
+            .primaryTerms(new long[] { 1 })
+            .system(true)
+            .build();
+
+        assertEquals(model1.hashCode(), model2.hashCode());
+        assertNotEquals(model1.hashCode(), model3.hashCode());
     }
 }

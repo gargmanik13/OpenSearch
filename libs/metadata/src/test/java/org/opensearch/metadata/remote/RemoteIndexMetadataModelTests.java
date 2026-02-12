@@ -18,6 +18,7 @@ import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.compress.Compressor;
 import org.opensearch.core.xcontent.ToXContent;
 import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.metadata.common.XContentContext;
 import org.opensearch.metadata.index.model.AliasMetadataModel;
 import org.opensearch.metadata.index.model.IndexMetadataModel;
 import org.opensearch.metadata.settings.SettingsModel;
@@ -25,6 +26,7 @@ import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -264,11 +266,14 @@ public class RemoteIndexMetadataModelTests extends OpenSearchTestCase {
     }
 
     private byte[] serializeToSmile(IndexMetadataModel model) throws IOException {
+        ToXContent.Params gatewayParams = new ToXContent.MapParams(
+            Collections.singletonMap(XContentContext.PARAM_KEY, XContentContext.GATEWAY.name())
+        );
         try (XContentBuilder builder = XContentType.SMILE.contentBuilder()) {
             builder.startObject();
-            model.toXContent(builder, ToXContent.EMPTY_PARAMS);
+            model.toXContent(builder, gatewayParams);
             builder.endObject();
-            return BytesReference.bytes(builder).toBytesRef().bytes;
+            return BytesReference.toBytes(BytesReference.bytes(builder));
         }
     }
 

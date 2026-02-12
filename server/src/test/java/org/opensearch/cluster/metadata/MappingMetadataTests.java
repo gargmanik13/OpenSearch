@@ -12,6 +12,7 @@ import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.common.io.stream.BytesStreamOutput;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.common.io.stream.BufferedChecksumStreamOutput;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.metadata.index.model.MappingMetadataModel;
 import org.opensearch.test.OpenSearchTestCase;
@@ -23,6 +24,8 @@ import java.util.Map;
 import static org.hamcrest.Matchers.equalTo;
 
 public class MappingMetadataTests extends OpenSearchTestCase {
+
+    // --- Serialization tests ---
 
     public void testSerialization() throws IOException {
         Map<String, Object> mapping = createTestMapping();
@@ -55,23 +58,20 @@ public class MappingMetadataTests extends OpenSearchTestCase {
         assertTrue(after.routingRequired());
     }
 
+    // --- Model interop tests ---
+
     public void testModelDeserialization() throws IOException {
         Map<String, Object> mapping = createTestMapping();
         final MappingMetadata mappingMetadata = new MappingMetadata("_doc", mapping);
 
-        // Serialize using MappingMetadata
         final BytesStreamOutput out = new BytesStreamOutput();
         mappingMetadata.writeTo(out);
 
-        // Deserialize using MappingMetadataModel
         final StreamInput in = out.bytes().streamInput();
         final MappingMetadataModel model = new MappingMetadataModel(in);
 
-        // Verify all fields match
         assertThat(model.type(), equalTo(mappingMetadata.type()));
         assertThat(model.routingRequired(), equalTo(mappingMetadata.routingRequired()));
-
-        // Verify source content matches
         assertNotNull(model.source());
         assertArrayEquals(mappingMetadata.source().compressed(), model.source().compressedBytes());
     }
@@ -80,44 +80,59 @@ public class MappingMetadataTests extends OpenSearchTestCase {
         Map<String, Object> mapping = createTestMappingWithRouting(true);
         final MappingMetadata mappingMetadata = new MappingMetadata("_doc", mapping);
 
-        // Serialize using MappingMetadata
         final BytesStreamOutput out = new BytesStreamOutput();
         mappingMetadata.writeTo(out);
 
-        // Deserialize using MappingMetadataModel
         final StreamInput in = out.bytes().streamInput();
         final MappingMetadataModel model = new MappingMetadataModel(in);
 
-        // Verify routing required is preserved
         assertTrue(model.routingRequired());
         assertThat(model.type(), equalTo("_doc"));
     }
 
     public void testModelToMetadataSerialization() throws IOException {
-        // Create a MappingMetadata, serialize it
         Map<String, Object> mapping = createTestMapping();
         final MappingMetadata original = new MappingMetadata("_doc", mapping);
 
         final BytesStreamOutput out1 = new BytesStreamOutput();
         original.writeTo(out1);
 
-        // Deserialize as MappingMetadataModel
         final StreamInput in1 = out1.bytes().streamInput();
         final MappingMetadataModel model = new MappingMetadataModel(in1);
 
-        // Serialize the model
         final BytesStreamOutput out2 = new BytesStreamOutput();
         model.writeTo(out2);
 
-        // Deserialize as MappingMetadata
         final StreamInput in2 = out2.bytes().streamInput();
         final MappingMetadata restored = new MappingMetadata(in2);
 
-        // Verify round-trip preserves data
         assertThat(restored.type(), equalTo(original.type()));
         assertThat(restored.routingRequired(), equalTo(original.routingRequired()));
         assertArrayEquals(restored.source().compressed(), original.source().compressed());
     }
+
+    public void testConstructorFromModel() throws IOException {
+        Map<String, Object> mapping = createTestMappingWithRouting(true);
+        final MappingMetadata original = new MappingMetadata("_doc", mapping);
+
+        MappingMetadata fromModel = new MappingMetadata(original.model());
+
+        assertThat(fromModel, equalTo(original));
+        assertThat(fromModel.type(), equalTo(original.type()));
+        assertThat(fromModel.routingRequired(), equalTo(original.routingRequired()));
+    }
+
+    public void testModelAccessor() {
+        Map<String, Object> mapping = createTestMappingWithRouting(true);
+        final MappingMetadata mm = new MappingMetadata("_doc", mapping);
+
+        MappingMetadataModel model = mm.model();
+        assertNotNull(model);
+        assertThat(model.type(), equalTo("_doc"));
+        assertTrue(model.routingRequired());
+    }
+
+    // --- Constructor tests ---
 
     public void testEmptyMappings() throws IOException {
         final MappingMetadata before = MappingMetadata.EMPTY_MAPPINGS;
@@ -134,81 +149,81 @@ public class MappingMetadataTests extends OpenSearchTestCase {
 
     public void testCompressedXContentConstructor() throws IOException {
         Map<String, Object> mapping = new HashMap<>();
-        Map<String, Object> docMapping = createTestMappingContent();
-        mapping.put("_doc", docMapping);
+        mapping.put("_doc", createTestMappingContent());
 
         CompressedXContent compressedMapping = new CompressedXContent(BytesReference.bytes(XContentFactory.jsonBuilder().map(mapping)));
-        final MappingMetadata before = new MappingMetadata(compressedMapping);
+        final MappingMetadata mm = new MappingMetadata(compressedMapping);
 
-        assertThat(before.type(), equalTo("_doc"));
+        assertThat(mm.type(), equalTo("_doc"));
 
         final BytesStreamOutput out = new BytesStreamOutput();
-        before.writeTo(out);
+        mm.writeTo(out);
 
         final StreamInput in = out.bytes().streamInput();
         final MappingMetadata after = new MappingMetadata(in);
 
-        assertThat(after, equalTo(before));
+        assertThat(after, equalTo(mm));
     }
 
-    public void testModelAccessor() throws IOException {
+    // --- sourceAsMap tests ---
+
+    public void testSourceAsMap() {
+        Map<String, Object> mapping = createTestMapping();
+        MappingMetadata mm = new MappingMetadata("_doc", mapping);
+
+        Map<String, Object> sourceMap = mm.sourceAsMap();
+        // sourceAsMap reduces the type wrapper
+        assertTrue(sourceMap.containsKey("properties"));
+        assertFalse(sourceMap.containsKey("_doc"));
+    }
+
+    public void testGetSourceAsMapDelegatesToSourceAsMap() {
+        Map<String, Object> mapping = createTestMapping();
+        MappingMetadata mm = new MappingMetadata("_doc", mapping);
+
+        assertEquals(mm.sourceAsMap(), mm.getSourceAsMap());
+    }
+
+    // --- Equals/hashCode tests ---
+
+    public void testEquals() {
+        Map<String, Object> mapping = createTestMapping();
+        MappingMetadata m1 = new MappingMetadata("_doc", mapping);
+        MappingMetadata m2 = new MappingMetadata("_doc", mapping);
+
+        assertEquals(m1, m2);
+        assertEquals(m1.hashCode(), m2.hashCode());
+    }
+
+    public void testNotEqualsNull() {
+        assertNotEquals(new MappingMetadata("_doc", createTestMapping()), null);
+    }
+
+    public void testNotEqualsDifferentType() {
+        assertNotEquals(new MappingMetadata("_doc", createTestMapping()), "a string");
+    }
+
+    public void testNotEqualsDifferentRouting() {
+        MappingMetadata m1 = new MappingMetadata("_doc", createTestMappingWithRouting(true));
+        MappingMetadata m2 = new MappingMetadata("_doc", createTestMappingWithRouting(false));
+        assertNotEquals(m1, m2);
+    }
+
+    // --- writeVerifiableTo test ---
+
+    public void testWriteVerifiableTo() throws IOException {
         Map<String, Object> mapping = createTestMappingWithRouting(true);
-        final MappingMetadata mappingMetadata = new MappingMetadata("_doc", mapping);
+        MappingMetadata mm = new MappingMetadata("_doc", mapping);
 
-        // Verify model() accessor returns the underlying model
-        MappingMetadataModel model = mappingMetadata.model();
-        assertNotNull(model);
-        assertThat(model.type(), equalTo("_doc"));
-        assertTrue(model.routingRequired());
-        assertNotNull(model.source());
+        BytesStreamOutput bso = new BytesStreamOutput();
+        BufferedChecksumStreamOutput out = new BufferedChecksumStreamOutput(bso);
+        mm.writeVerifiableTo(out);
+        out.flush();
+
+        assertTrue(bso.bytes().length() > 0);
     }
 
-    public void testConstructorFromModel() throws IOException {
-        // Create original MappingMetadata
-        Map<String, Object> mapping = createTestMappingWithRouting(true);
-        final MappingMetadata original = new MappingMetadata("_doc", mapping);
-
-        // Get the model and create new MappingMetadata from it
-        MappingMetadataModel model = original.model();
-        MappingMetadata fromModel = new MappingMetadata(model);
-
-        // Verify all fields match
-        assertThat(fromModel.type(), equalTo(original.type()));
-        assertThat(fromModel.routingRequired(), equalTo(original.routingRequired()));
-        assertArrayEquals(fromModel.source().compressed(), original.source().compressed());
-
-        // Verify equals
-        assertThat(fromModel, equalTo(original));
-    }
-
-    public void testModelRoundTrip() throws IOException {
-        Map<String, Object> mapping = createTestMappingWithRouting(false);
-        final MappingMetadata original = new MappingMetadata("_doc", mapping);
-
-        // Serialize MappingMetadata
-        final BytesStreamOutput out1 = new BytesStreamOutput();
-        original.writeTo(out1);
-
-        // Deserialize as MappingMetadataModel
-        final StreamInput in1 = out1.bytes().streamInput();
-        final MappingMetadataModel model = new MappingMetadataModel(in1);
-
-        // Create new MappingMetadata from model
-        MappingMetadata fromModel = new MappingMetadata(model);
-
-        // Serialize the new MappingMetadata
-        final BytesStreamOutput out2 = new BytesStreamOutput();
-        fromModel.writeTo(out2);
-
-        // Deserialize back to MappingMetadata
-        final StreamInput in2 = out2.bytes().streamInput();
-        final MappingMetadata restored = new MappingMetadata(in2);
-
-        // Verify round-trip preserves all data
-        assertThat(restored, equalTo(original));
-        assertThat(restored.type(), equalTo(original.type()));
-        assertThat(restored.routingRequired(), equalTo(original.routingRequired()));
-    }
+    // --- Helpers ---
 
     private Map<String, Object> createTestMapping() {
         Map<String, Object> mapping = new HashMap<>();

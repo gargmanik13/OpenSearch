@@ -9,10 +9,12 @@
 package org.opensearch.metadata.index.model;
 
 import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.core.ParseField;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
-import org.opensearch.core.xcontent.ToXContentFragment;
+import org.opensearch.core.xcontent.ConstructingObjectParser;
+import org.opensearch.core.xcontent.ToXContentObject;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
 
@@ -25,11 +27,31 @@ import java.util.Objects;
  * depending on the full Context class from server module.
  */
 @ExperimentalApi
-public final class ContextModel implements Writeable, ToXContentFragment {
+public final class ContextModel implements Writeable, ToXContentObject {
 
-    private static final String NAME_FIELD = "name";
-    private static final String VERSION_FIELD = "version";
-    private static final String PARAMS_FIELD = "params";
+    /** ParseField for the context name. */
+    public static final ParseField NAME_FIELD = new ParseField("name");
+    /** ParseField for the context version. */
+    public static final ParseField VERSION_FIELD = new ParseField("version");
+    /** ParseField for the context parameters. */
+    public static final ParseField PARAMS_FIELD = new ParseField("params");
+
+    /** Default version when none is specified. */
+    public static final String LATEST_VERSION = "_latest";
+
+    /** Parser for ContextModel from XContent. */
+    @SuppressWarnings("unchecked")
+    public static final ConstructingObjectParser<ContextModel, Void> PARSER = new ConstructingObjectParser<>(
+        "index_template",
+        false,
+        a -> new ContextModel((String) a[0], (String) a[1], (Map<String, Object>) a[2])
+    );
+
+    static {
+        PARSER.declareString(ConstructingObjectParser.constructorArg(), NAME_FIELD);
+        PARSER.declareString(ConstructingObjectParser.optionalConstructorArg(), VERSION_FIELD);
+        PARSER.declareObject(ConstructingObjectParser.optionalConstructorArg(), (p, c) -> p.map(), PARAMS_FIELD);
+    }
 
     private final String name;
     private final String version;
@@ -37,20 +59,20 @@ public final class ContextModel implements Writeable, ToXContentFragment {
 
     /**
      * Creates a ContextModel with the given fields.
+     * Null version is defaulted to {@link #LATEST_VERSION}.
      *
      * @param name the context name
-     * @param version the context version
+     * @param version the context version (null defaults to {@link #LATEST_VERSION})
      * @param params the context parameters
      */
     public ContextModel(String name, String version, Map<String, Object> params) {
         this.name = name;
-        this.version = version;
+        this.version = version != null ? version : LATEST_VERSION;
         this.params = params;
     }
 
     /**
      * Creates a ContextModel by reading from StreamInput.
-     * Wire format is compatible with Context(StreamInput).
      *
      * @param in the stream to read from
      * @throws IOException if an I/O error occurs
@@ -63,7 +85,6 @@ public final class ContextModel implements Writeable, ToXContentFragment {
 
     /**
      * Writes to StreamOutput.
-     * Wire format is compatible with Context.writeTo.
      *
      * @param out the stream to write to
      * @throws IOException if an I/O error occurs
@@ -117,46 +138,16 @@ public final class ContextModel implements Writeable, ToXContentFragment {
 
     /**
      * Parses a ContextModel from XContent.
-     * Expects the parser to be positioned at the start of a context object.
      *
      * @param parser the XContent parser
      * @return the parsed ContextModel
-     * @throws IOException if parsing fails
      */
-    public static ContextModel fromXContent(XContentParser parser) throws IOException {
-        String name = null;
-        String version = null;
-        Map<String, Object> params = null;
-
-        XContentParser.Token token;
-        String currentFieldName = null;
-
-        while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
-            if (token == XContentParser.Token.FIELD_NAME) {
-                currentFieldName = parser.currentName();
-            } else if (token.isValue()) {
-                if (NAME_FIELD.equals(currentFieldName)) {
-                    name = parser.text();
-                } else if (VERSION_FIELD.equals(currentFieldName)) {
-                    version = parser.text();
-                }
-            } else if (token == XContentParser.Token.START_OBJECT) {
-                if (PARAMS_FIELD.equals(currentFieldName)) {
-                    params = parser.map();
-                } else {
-                    parser.skipChildren();
-                }
-            } else if (token == XContentParser.Token.VALUE_NULL) {
-                // Handle null values - just skip them
-            }
-        }
-
-        return new ContextModel(name, version, params);
+    public static ContextModel fromXContent(XContentParser parser) {
+        return PARSER.apply(parser, null);
     }
 
     /**
      * Writes this ContextModel to XContent.
-     * Outputs context fields within the current object context.
      *
      * @param builder the XContent builder
      * @param params the ToXContent params
@@ -165,13 +156,13 @@ public final class ContextModel implements Writeable, ToXContentFragment {
      */
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.field(NAME_FIELD, name);
-        if (version != null) {
-            builder.field(VERSION_FIELD, version);
-        }
+        builder.startObject();
+        builder.field(NAME_FIELD.getPreferredName(), name);
+        builder.field(VERSION_FIELD.getPreferredName(), version);
         if (this.params != null) {
-            builder.field(PARAMS_FIELD, this.params);
+            builder.field(PARAMS_FIELD.getPreferredName(), this.params);
         }
+        builder.endObject();
         return builder;
     }
 }

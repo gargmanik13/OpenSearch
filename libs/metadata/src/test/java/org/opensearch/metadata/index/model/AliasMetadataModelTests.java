@@ -24,11 +24,51 @@ import org.opensearch.test.OpenSearchTestCase;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.zip.CRC32;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.equalTo;
 
 public class AliasMetadataModelTests extends OpenSearchTestCase {
+
+    // --- Constructor tests ---
+
+    public void testConstructorNullAliasThrows() {
+        expectThrows(NullPointerException.class, () -> new AliasMetadataModel(null, null, null, null, null, null));
+    }
+
+    public void testCopyConstructor() throws IOException {
+        CompressedData filter = createJsonFilter("{\"term\":{\"user\":\"kimchy\"}}");
+        AliasMetadataModel original = new AliasMetadataModel("orig", filter, "idx", "search", true, false);
+        AliasMetadataModel copy = new AliasMetadataModel(original, "renamed");
+
+        assertEquals("renamed", copy.alias());
+        assertEquals(original.filter(), copy.filter());
+        assertEquals(original.indexRouting(), copy.indexRouting());
+        assertEquals(original.searchRouting(), copy.searchRouting());
+        assertEquals(original.writeIndex(), copy.writeIndex());
+        assertEquals(original.isHidden(), copy.isHidden());
+    }
+
+    public void testFilteringRequired() throws IOException {
+        AliasMetadataModel withFilter = new AliasMetadataModel.Builder("a").filter(createJsonFilter("{\"term\":{}}")).build();
+        AliasMetadataModel withoutFilter = new AliasMetadataModel.Builder("b").build();
+
+        assertTrue(withFilter.filteringRequired());
+        assertFalse(withoutFilter.filteringRequired());
+    }
+
+    public void testSearchRoutingValues() {
+        AliasMetadataModel model = new AliasMetadataModel.Builder("a").searchRouting("trim,tw , ltw , lw").build();
+        assertThat(model.searchRoutingValues(), equalTo(Sets.newHashSet("trim", "tw ", " ltw ", " lw")));
+    }
+
+    public void testSearchRoutingValuesNull() {
+        AliasMetadataModel model = new AliasMetadataModel.Builder("a").build();
+        assertTrue(model.searchRoutingValues().isEmpty());
+    }
+
+    // --- Serialization tests ---
 
     public void testSerialization() throws IOException {
         final AliasMetadataModel before = new AliasMetadataModel.Builder("alias").filter(createTestFilter())
@@ -54,6 +94,8 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
         assertEquals(before.hashCode(), after.hashCode());
     }
 
+    // --- Equals/hashCode tests ---
+
     public void testEquals() {
         AliasMetadataModel model1 = createTestItem();
         AliasMetadataModel model2 = new AliasMetadataModel(
@@ -70,43 +112,29 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
         assertEquals(model1.hashCode(), model2.hashCode());
     }
 
-    private static AliasMetadataModel createTestItem() {
-        AliasMetadataModel.Builder builder = new AliasMetadataModel.Builder(randomAlphaOfLengthBetween(3, 10));
-        if (randomBoolean()) {
-            builder.routing(randomAlphaOfLengthBetween(3, 10));
-        }
-        if (randomBoolean()) {
-            builder.searchRouting(randomAlphaOfLengthBetween(3, 10));
-        }
-        if (randomBoolean()) {
-            builder.indexRouting(randomAlphaOfLengthBetween(3, 10));
-        }
-        if (randomBoolean()) {
-            builder.filter(createTestFilter());
-        }
-        builder.writeIndex(randomBoolean());
-
-        if (randomBoolean()) {
-            builder.isHidden(randomBoolean());
-        }
-        return builder.build();
+    public void testNotEqualsNull() {
+        assertNotEquals(createTestItem(), null);
     }
 
-    private static CompressedData createTestFilter() {
-        return new CompressedData(randomByteArrayOfLength(randomIntBetween(10, 50)), randomInt());
+    public void testNotEqualsDifferentType() {
+        assertNotEquals(createTestItem(), "a string");
     }
 
-    private static CompressedData createJsonFilter(String json) throws IOException {
-        byte[] bytes = json.getBytes();
-        CRC32 crc32 = new CRC32();
-        crc32.update(bytes);
-        return new CompressedData(bytes, (int) crc32.getValue());
+    public void testNotEqualsDifferentAlias() {
+        AliasMetadataModel m1 = new AliasMetadataModel.Builder("alias1").build();
+        AliasMetadataModel m2 = new AliasMetadataModel.Builder("alias2").build();
+        assertNotEquals(m1, m2);
     }
 
-    // XContent Tests
+    public void testNotEqualsDifferentRouting() {
+        AliasMetadataModel m1 = new AliasMetadataModel.Builder("a").indexRouting("r1").build();
+        AliasMetadataModel m2 = new AliasMetadataModel.Builder("a").indexRouting("r2").build();
+        assertNotEquals(m1, m2);
+    }
+
+    // --- XContent tests ---
 
     public void testXContentRoundTrip() throws IOException {
-        // Create a model with a valid JSON filter
         CompressedData filter = createJsonFilter("{\"term\":{\"user\":\"kimchy\"}}");
         AliasMetadataModel original = new AliasMetadataModel.Builder("test-alias").filter(filter)
             .indexRouting("index_route")
@@ -115,17 +143,11 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
             .isHidden(false)
             .build();
 
-        // Serialize to XContent
-        XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
-        original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = toXContentBytes(original, ToXContent.EMPTY_PARAMS);
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME (alias name)
+            parser.nextToken();
+            parser.nextToken();
             AliasMetadataModel parsed = AliasMetadataModel.fromXContent(parser);
 
             assertEquals(original.alias(), parsed.alias());
@@ -143,17 +165,11 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
             .writeIndex(false)
             .build();
 
-        // Serialize to XContent
-        XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
-        original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = toXContentBytes(original, ToXContent.EMPTY_PARAMS);
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME (alias name)
+            parser.nextToken();
+            parser.nextToken();
             AliasMetadataModel parsed = AliasMetadataModel.fromXContent(parser);
 
             assertEquals(original.alias(), parsed.alias());
@@ -168,17 +184,11 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
     public void testXContentRoundTripMinimal() throws IOException {
         AliasMetadataModel original = new AliasMetadataModel.Builder("minimal-alias").build();
 
-        // Serialize to XContent
-        XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
-        original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = toXContentBytes(original, ToXContent.EMPTY_PARAMS);
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME (alias name)
+            parser.nextToken();
+            parser.nextToken();
             AliasMetadataModel parsed = AliasMetadataModel.fromXContent(parser);
 
             assertEquals("minimal-alias", parsed.alias());
@@ -191,18 +201,74 @@ public class AliasMetadataModelTests extends OpenSearchTestCase {
     }
 
     public void testFromXContentWithRouting() throws IOException {
-        // Test parsing with the "routing" field which sets both index and search routing
         String json = "{\"my-alias\":{\"routing\":\"shared_route\"}}";
-        byte[] bytes = json.getBytes();
 
-        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME (alias name)
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, json.getBytes())) {
+            parser.nextToken();
+            parser.nextToken();
             AliasMetadataModel parsed = AliasMetadataModel.fromXContent(parser);
 
             assertEquals("my-alias", parsed.alias());
             assertEquals("shared_route", parsed.indexRouting());
             assertEquals("shared_route", parsed.searchRouting());
         }
+    }
+
+    public void testToXContentBinaryFilter() throws IOException {
+        CompressedData filter = createJsonFilter("{\"term\":{\"status\":\"active\"}}");
+        AliasMetadataModel model = new AliasMetadataModel.Builder("test").filter(filter).build();
+
+        Map<String, String> params = new HashMap<>();
+        params.put("binary", "true");
+        byte[] bytes = toXContentBytes(model, new ToXContent.MapParams(params));
+
+        // Should produce valid output with binary filter
+        assertNotNull(bytes);
+        assertTrue(bytes.length > 0);
+    }
+
+    // --- Builder tests ---
+
+    public void testBuilderFromModel() throws IOException {
+        CompressedData filter = createJsonFilter("{\"term\":{}}");
+        AliasMetadataModel original = new AliasMetadataModel("a", filter, "idx", "search", true, false);
+        AliasMetadataModel copy = new AliasMetadataModel.Builder(original).build();
+
+        assertEquals(original, copy);
+    }
+
+    public void testBuilderRouting() {
+        AliasMetadataModel model = new AliasMetadataModel.Builder("a").routing("shared").build();
+        assertEquals("shared", model.indexRouting());
+        assertEquals("shared", model.searchRouting());
+    }
+
+    // --- Helpers ---
+
+    private static AliasMetadataModel createTestItem() {
+        AliasMetadataModel.Builder builder = new AliasMetadataModel.Builder(randomAlphaOfLengthBetween(3, 10));
+        if (randomBoolean()) builder.routing(randomAlphaOfLengthBetween(3, 10));
+        if (randomBoolean()) builder.searchRouting(randomAlphaOfLengthBetween(3, 10));
+        if (randomBoolean()) builder.indexRouting(randomAlphaOfLengthBetween(3, 10));
+        if (randomBoolean()) builder.filter(createTestFilter());
+        builder.writeIndex(randomBoolean());
+        if (randomBoolean()) builder.isHidden(randomBoolean());
+        return builder.build();
+    }
+
+    private static CompressedData createTestFilter() {
+        return new CompressedData(randomByteArrayOfLength(randomIntBetween(10, 50)), randomInt());
+    }
+
+    private static CompressedData createJsonFilter(String json) throws IOException {
+        return new CompressedData(json.getBytes());
+    }
+
+    private static byte[] toXContentBytes(AliasMetadataModel model, ToXContent.Params params) throws IOException {
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        builder.startObject();
+        model.toXContent(builder, params);
+        builder.endObject();
+        return BytesReference.toBytes(BytesReference.bytes(builder));
     }
 }

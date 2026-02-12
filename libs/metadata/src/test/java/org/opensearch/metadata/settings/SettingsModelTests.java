@@ -24,6 +24,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -215,7 +216,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -238,7 +239,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -263,7 +264,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -290,7 +291,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -310,7 +311,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
@@ -345,7 +346,7 @@ public class SettingsModelTests extends OpenSearchTestCase {
         builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
         builder.endObject();
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
 
         // Parse back from SMILE format
         try (XContentParser parser = SmileXContent.smileXContent.createParser(null, null, bytes)) {
@@ -353,5 +354,38 @@ public class SettingsModelTests extends OpenSearchTestCase {
             SettingsModel parsed = SettingsModel.fromXContent(parser);
             assertEquals(original, parsed);
         }
+    }
+
+    public void testXContentFlatSettingsRoundTrip() throws IOException {
+        Map<String, Object> settings = new HashMap<>();
+        settings.put("index.number_of_shards", "5");
+        settings.put("index.number_of_replicas", "1");
+        settings.put("index.routing.allocation.include._tier_preference", Arrays.asList("data_hot", "data_warm"));
+        settings.put("index.null_setting", null);
+
+        SettingsModel original = new SettingsModel(settings);
+
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        builder.startObject();
+        original.toXContent(builder, new ToXContent.MapParams(Collections.singletonMap("flat_settings", "true")));
+        builder.endObject();
+        byte[] bytes = BytesReference.toBytes(BytesReference.bytes(builder));
+
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
+            parser.nextToken();
+            SettingsModel parsed = SettingsModel.fromXContent(parser);
+            assertEquals(original, parsed);
+        }
+    }
+
+    public void testEqualsEdgeCases() {
+        SettingsModel model = createTestItem();
+        assertEquals(model, model);
+        assertNotEquals(model, null);
+        assertNotEquals(model, "not a SettingsModel");
+
+        Map<String, Object> different = new HashMap<>();
+        different.put("completely.different.key", "value");
+        assertNotEquals(model, new SettingsModel(different));
     }
 }

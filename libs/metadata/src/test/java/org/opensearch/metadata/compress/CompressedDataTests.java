@@ -12,13 +12,12 @@ import org.opensearch.core.common.io.stream.InputStreamStreamInput;
 import org.opensearch.core.common.io.stream.OutputStreamStreamOutput;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
-import org.opensearch.core.compress.NoneCompressor;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Random;
+import java.nio.charset.StandardCharsets;
 import java.util.zip.CRC32;
 
 import static org.hamcrest.Matchers.equalTo;
@@ -33,164 +32,144 @@ public class CompressedDataTests extends OpenSearchTestCase {
         assertThat(d1.hashCode(), equalTo(d2.hashCode()));
     }
 
-    public void testSerialization() throws IOException {
-        final CompressedData before = createTestItem();
+    private static CompressedData compressJson(String json) throws IOException {
+        return new CompressedData(json.getBytes(StandardCharsets.UTF_8));
+    }
 
-        final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        final StreamOutput out = new OutputStreamStreamOutput(baos);
+    public void testSerialization() throws IOException {
+        CompressedData before = compressJson("{\"test\":\"serialization\"}");
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamOutput out = new OutputStreamStreamOutput(baos);
         before.writeTo(out);
         out.close();
 
-        final ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-        final StreamInput in = new InputStreamStreamInput(bais);
-        final CompressedData after = new CompressedData(in);
+        StreamInput in = new InputStreamStreamInput(new ByteArrayInputStream(baos.toByteArray()));
+        CompressedData after = new CompressedData(in);
 
         assertEquals(before, after);
     }
 
-    public void testSimple() {
-        byte[] bytes = "this is a simple byte array".getBytes();
-        int checksum = 12345;
-
-        CompressedData data = new CompressedData(bytes, checksum);
-        assertArrayEquals(data.compressedBytes(), bytes);
-        assertThat(data.checksum(), equalTo(checksum));
-
-        CompressedData data2 = new CompressedData(bytes.clone(), checksum);
-        assertEquals(data, data2);
-
-        byte[] bytes2 = "this is a different byte array".getBytes();
-        CompressedData data3 = new CompressedData(bytes2, checksum);
-        assertThat(data3.compressedBytes(), not(equalTo(bytes)));
-        assertThat(data3, not(equalTo(data)));
+    public void testConstructorAndGetters() throws IOException {
+        CompressedData data = compressJson("{\"key\":\"value\"}");
+        assertNotNull(data.compressedBytes());
+        assertNotNull(data.compressedReference());
+        assertTrue(data.compressedBytes().length > 0);
     }
 
-    public void testRandom() throws IOException {
-        Random r = random();
-        for (int i = 0; i < 100; i++) {
-            byte[] bytes = randomByteArrayOfLength(r.nextInt(10000) + 1);
-            int checksum = r.nextInt();
+    public void testDefensiveCopy() throws IOException {
+        CompressedData data = compressJson("{\"key\":\"value\"}");
+        byte[] bytes1 = data.compressedBytes();
+        byte[] bytes2 = data.compressedBytes();
+        assertArrayEquals(bytes1, bytes2);
+        assertNotSame(bytes1, bytes2);
+    }
 
-            CompressedData data = new CompressedData(bytes, checksum);
-            assertArrayEquals(data.compressedBytes(), bytes);
-            assertThat(data.checksum(), equalTo(checksum));
+    public void testUncompressedRoundTrip() throws IOException {
+        String json = "{\"field\":\"round-trip\"}";
+        CompressedData data = compressJson(json);
 
-            // Test serialization round-trip
-            final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            final StreamOutput out = new OutputStreamStreamOutput(baos);
-            data.writeTo(out);
+        byte[] uncompressed = data.uncompressed();
+        assertThat(new String(uncompressed, StandardCharsets.UTF_8), equalTo(json));
+
+        CRC32 crc32 = new CRC32();
+        crc32.update(json.getBytes(StandardCharsets.UTF_8));
+        assertThat(data.checksum(), equalTo((int) crc32.getValue()));
+    }
+
+    public void testEqualsIdenticalBytes() throws IOException {
+        CompressedData d1 = compressJson("{\"a\":1}");
+        CompressedData d2 = new CompressedData(d1.compressedBytes(), d1.checksum());
+        assertEquals(d1, d2);
+    }
+
+    public void testEqualsSameContentDifferentCompression() throws IOException {
+        // Same uncompressed content but constructed separately — may have same compressed bytes
+        // but tests the equals path
+        String json = "{\"same\":\"content\"}";
+        CompressedData d1 = compressJson(json);
+        CompressedData d2 = compressJson(json);
+        assertEquals(d1, d2);
+    }
+
+    public void testNotEqualsDifferentContent() throws IOException {
+        CompressedData d1 = compressJson("{\"a\":1}");
+        CompressedData d2 = compressJson("{\"b\":2}");
+        assertThat(d1, not(equalTo(d2)));
+    }
+
+    public void testEqualsFastPathSameBytes() {
+        // Smart equals: if compressed bytes match, they're equal (fast path)
+        byte[] bytes = new byte[] { 1, 2, 3 };
+        CompressedData d1 = new CompressedData(bytes, 100);
+        CompressedData d2 = new CompressedData(bytes.clone(), 100);
+        assertThat(d1, equalTo(d2));
+    }
+
+    public void testNotEqualsDifferentBytesAndChecksum() {
+        CompressedData d1 = new CompressedData(new byte[] { 1, 2, 3 }, 100);
+        CompressedData d2 = new CompressedData(new byte[] { 4, 5, 6 }, 200);
+        assertThat(d1, not(equalTo(d2)));
+    }
+
+    public void testHashCode() throws IOException {
+        CompressedData data = compressJson("{\"hash\":\"test\"}");
+        assertThat(data.hashCode(), equalTo(data.checksum()));
+    }
+
+    public void testToString() throws IOException {
+        String json = "{\"to\":\"string\"}";
+        CompressedData data = compressJson(json);
+        assertThat(data.toString(), equalTo(json));
+    }
+
+    public void testAutoDetectConstructor() throws IOException {
+        String json = "{\"from\":\"bytes\"}";
+        byte[] raw = json.getBytes(StandardCharsets.UTF_8);
+
+        // constructor with uncompressed input
+        CompressedData fromRaw = new CompressedData(raw);
+        assertThat(new String(fromRaw.uncompressed(), StandardCharsets.UTF_8), equalTo(json));
+
+        // constructor with already-compressed input
+        CompressedData fromCompressed = new CompressedData(fromRaw.compressedBytes());
+        assertThat(new String(fromCompressed.uncompressed(), StandardCharsets.UTF_8), equalTo(json));
+        assertThat(fromRaw.checksum(), equalTo(fromCompressed.checksum()));
+    }
+
+    public void testAutoDetectConstructorNullThrows() {
+        expectThrows(NullPointerException.class, () -> new CompressedData((byte[]) null));
+    }
+
+    public void testRawConstructorNullThrows() {
+        expectThrows(NullPointerException.class, () -> new CompressedData(null, 0));
+    }
+
+    public void testSerializationRandom() throws IOException {
+        for (int i = 0; i < 50; i++) {
+            String json = "{\"i\":" + i + ",\"val\":\"" + randomAlphaOfLength(20) + "\"}";
+            CompressedData original = compressJson(json);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            StreamOutput out = new OutputStreamStreamOutput(baos);
+            original.writeTo(out);
             out.close();
 
-            final ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-            final StreamInput in = new InputStreamStreamInput(bais);
-            final CompressedData deserialized = new CompressedData(in);
+            StreamInput in = new InputStreamStreamInput(new ByteArrayInputStream(baos.toByteArray()));
+            CompressedData deserialized = new CompressedData(in);
 
-            assertEquals(data, deserialized);
+            assertEquals(original, deserialized);
+            assertThat(new String(deserialized.uncompressed(), StandardCharsets.UTF_8), equalTo(json));
         }
     }
 
-    public void testHashCode() {
-        CompressedData data1 = new CompressedData(new byte[] { 1, 2, 3 }, 100);
-        CompressedData data2 = new CompressedData(new byte[] { 1, 2, 3 }, 200);
-
-        // Different checksums should produce different hashCodes
-        assertNotEquals(data1.hashCode(), data2.hashCode());
+    public void testEqualsNull() throws IOException {
+        CompressedData data = compressJson("{\"null\":\"test\"}");
+        assertNotEquals(data, null);
     }
 
-    public void testEqualsWithSameBytes() {
-        byte[] bytes = randomByteArrayOfLength(50);
-        int checksum = randomInt();
-
-        CompressedData data1 = new CompressedData(bytes, checksum);
-        CompressedData data2 = new CompressedData(bytes.clone(), checksum);
-
-        assertEquals(data1, data2);
-    }
-
-    public void testNotEqualsWithDifferentBytes() {
-        int checksum = randomInt();
-
-        CompressedData data1 = new CompressedData(new byte[] { 1, 2, 3 }, checksum);
-        CompressedData data2 = new CompressedData(new byte[] { 4, 5, 6 }, checksum);
-
-        assertThat(data1, not(equalTo(data2)));
-    }
-
-    public void testNotEqualsWithDifferentChecksum() {
-        byte[] bytes = new byte[] { 1, 2, 3 };
-
-        CompressedData data1 = new CompressedData(bytes, 100);
-        CompressedData data2 = new CompressedData(bytes.clone(), 200);
-
-        assertThat(data1, not(equalTo(data2)));
-    }
-
-    private static CompressedData createTestItem() {
-        return new CompressedData(randomByteArrayOfLength(randomIntBetween(10, 100)), randomInt());
-    }
-
-    public void testCompressAndUncompressRoundTrip() throws IOException {
-        NoneCompressor compressor = new NoneCompressor();
-        byte[] originalData = "This is test data for compression round-trip".getBytes();
-
-        // Compress the data
-        CompressedData compressed = CompressedData.compress(originalData, compressor);
-
-        // Verify checksum is computed correctly
-        CRC32 crc32 = new CRC32();
-        crc32.update(originalData);
-        int expectedChecksum = (int) crc32.getValue();
-        assertThat(compressed.checksum(), equalTo(expectedChecksum));
-
-        // Uncompress and verify data matches
-        byte[] uncompressed = compressed.uncompressed(compressor);
-        assertArrayEquals(originalData, uncompressed);
-    }
-
-    public void testCompressAndUncompressWithRandomData() throws IOException {
-        NoneCompressor compressor = new NoneCompressor();
-        Random r = random();
-
-        for (int i = 0; i < 50; i++) {
-            byte[] originalData = randomByteArrayOfLength(r.nextInt(1000) + 1);
-
-            // Compress the data
-            CompressedData compressed = CompressedData.compress(originalData, compressor);
-
-            // Uncompress and verify data matches
-            byte[] uncompressed = compressed.uncompressed(compressor);
-            assertArrayEquals(originalData, uncompressed);
-
-            // Verify checksum
-            CRC32 crc32 = new CRC32();
-            crc32.update(originalData);
-            int expectedChecksum = (int) crc32.getValue();
-            assertThat(compressed.checksum(), equalTo(expectedChecksum));
-        }
-    }
-
-    public void testCompressNullDataThrowsException() {
-        NoneCompressor compressor = new NoneCompressor();
-        expectThrows(NullPointerException.class, () -> CompressedData.compress(null, compressor));
-    }
-
-    public void testCompressNullCompressorThrowsException() {
-        byte[] data = "test".getBytes();
-        expectThrows(NullPointerException.class, () -> CompressedData.compress(data, null));
-    }
-
-    public void testUncompressedNullCompressorThrowsException() {
-        CompressedData data = new CompressedData(new byte[] { 1, 2, 3 }, 100);
-        expectThrows(NullPointerException.class, () -> data.uncompressed(null));
-    }
-
-    public void testCompressEmptyData() throws IOException {
-        NoneCompressor compressor = new NoneCompressor();
-        byte[] emptyData = new byte[0];
-
-        CompressedData compressed = CompressedData.compress(emptyData, compressor);
-        byte[] uncompressed = compressed.uncompressed(compressor);
-
-        assertArrayEquals(emptyData, uncompressed);
+    public void testEqualsDifferentType() throws IOException {
+        CompressedData data = compressJson("{\"type\":\"test\"}");
+        assertNotEquals(data, "not a CompressedData");
     }
 }

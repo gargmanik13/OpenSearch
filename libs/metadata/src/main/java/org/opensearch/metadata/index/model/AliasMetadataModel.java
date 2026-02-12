@@ -28,7 +28,6 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.zip.CRC32;
 
 /**
  * Pure data holder class for alias metadata without dependencies on OpenSearch server packages.
@@ -452,10 +451,17 @@ public final class AliasMetadataModel implements Writeable, ToXContentFragment {
         public static void toXContent(AliasMetadataModel model, XContentBuilder builder, ToXContent.Params params) throws IOException {
             builder.startObject(model.alias());
 
+            boolean binary = params.paramAsBoolean("binary", false);
+
             if (model.filter() != null) {
-                try (XContentParser filterParser = JsonXContent.jsonXContent.createParser(null, null, model.filter().compressedBytes())) {
-                    filterParser.nextToken();
-                    builder.field(FILTER_FIELD, filterParser.map());
+                if (binary) {
+                    builder.field(FILTER_FIELD, model.filter().compressedBytes());
+                } else {
+                    byte[] uncompressed = model.filter().uncompressed();
+                    try (XContentParser filterParser = JsonXContent.jsonXContent.createParser(null, null, uncompressed)) {
+                        filterParser.nextToken();
+                        builder.field(FILTER_FIELD, filterParser.mapOrdered());
+                    }
                 }
             }
 
@@ -501,26 +507,22 @@ public final class AliasMetadataModel implements Writeable, ToXContentFragment {
         }
         XContentBuilder builder = JsonXContent.contentBuilder();
         builder.map(map);
-        byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
-        CRC32 crc32 = new CRC32();
-        crc32.update(bytes);
-        return new CompressedData(bytes, (int) crc32.getValue());
+        byte[] uncompressed = BytesReference.toBytes(BytesReference.bytes(builder));
+        return new CompressedData(uncompressed);
     }
 
     /**
-     * Creates CompressedData from raw binary bytes (e.g., from VALUE_EMBEDDED_OBJECT or VALUE_STRING binary tokens).
-     * Computes a CRC32 checksum from the provided bytes.
+     * Creates CompressedData from binary bytes (e.g., from VALUE_EMBEDDED_OBJECT or VALUE_STRING binary tokens).
+     * Delegates to {@link CompressedData#CompressedData(byte[])} which auto-detects compression.
      *
      * @param bytes the binary data
      * @return a new CompressedData instance, or null if bytes is null or empty
      */
-    private static CompressedData binaryToCompressedData(byte[] bytes) {
+    private static CompressedData binaryToCompressedData(byte[] bytes) throws IOException {
         if (bytes == null || bytes.length == 0) {
             return null;
         }
-        CRC32 crc32 = new CRC32();
-        crc32.update(bytes);
-        return new CompressedData(bytes, (int) crc32.getValue());
+        return new CompressedData(bytes);
     }
 
     /**

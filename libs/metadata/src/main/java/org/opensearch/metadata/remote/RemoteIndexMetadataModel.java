@@ -108,23 +108,20 @@ public class RemoteIndexMetadataModel implements RemoteWriteableEntity<IndexMeta
      */
     @Override
     public IndexMetadataModel deserialize(InputStream inputStream) throws IOException {
-        // Read all bytes from the input stream
-        byte[] data = inputStream.readAllBytes();
+        BytesReference bytes = new BytesArray(inputStream.readAllBytes());
 
-        // Validate checksum and extract content
-        byte[] content = checksumValidator.validateAndExtract(data, INDEX_METADATA_CODEC, MIN_CODEC_VERSION, MAX_CODEC_VERSION);
+        // Validate checksum and extract content slice (zero-copy)
+        BytesReference content = checksumValidator.validateAndSlice(bytes, INDEX_METADATA_CODEC, MIN_CODEC_VERSION, MAX_CODEC_VERSION);
 
         // Decompress if needed
-        if (compressor != null && compressor.isCompressed(new BytesArray(content))) {
-            BytesReference compressed = new BytesArray(content);
-            BytesReference uncompressed = compressor.uncompress(compressed);
-            content = BytesReference.toBytes(uncompressed);
+        if (compressor != null && compressor.isCompressed(content)) {
+            content = compressor.uncompress(content);
         }
 
         // Parse XContent (SMILE format)
         try (
             XContentParser parser = XContentType.SMILE.xContent()
-                .createParser(xContentRegistry, DeprecationHandler.IGNORE_DEPRECATIONS, content)
+                .createParser(xContentRegistry, DeprecationHandler.IGNORE_DEPRECATIONS, BytesReference.toBytes(content))
         ) {
             return IndexMetadataModel.fromXContent(parser);
         }

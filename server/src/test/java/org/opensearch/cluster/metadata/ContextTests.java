@@ -26,6 +26,52 @@ import static org.hamcrest.Matchers.equalTo;
 
 public class ContextTests extends OpenSearchTestCase {
 
+    // --- Constructor tests ---
+
+    public void testSimpleConstructor() {
+        Context context = new Context("simple-context");
+
+        assertThat(context.name(), equalTo("simple-context"));
+        assertThat(context.version(), equalTo(Context.LATEST_VERSION));
+        assertTrue(context.params().isEmpty());
+    }
+
+    public void testFullConstructorWithNullVersion() {
+        Context context = new Context("test", null, Map.of());
+        assertThat(context.version(), equalTo(Context.LATEST_VERSION));
+    }
+
+    public void testFullConstructorWithExplicitVersion() {
+        Context context = new Context("test", "2.0", Map.of("key", "val"));
+        assertThat(context.name(), equalTo("test"));
+        assertThat(context.version(), equalTo("2.0"));
+        assertThat(context.params().get("key"), equalTo("val"));
+    }
+
+    public void testContextFromModel() {
+        ContextModel model = new ContextModel("model-context", "2.0", Map.of("param", "value"));
+        Context context = new Context(model);
+
+        assertThat(context.name(), equalTo("model-context"));
+        assertThat(context.version(), equalTo("2.0"));
+        assertThat(context.params().get("param"), equalTo("value"));
+        assertSame(model, context.model());
+    }
+
+    public void testContextFromModelWithNullVersion() {
+        // ContextModel defaults null version to LATEST_VERSION
+        ContextModel model = new ContextModel("test", null, Map.of());
+        Context context = new Context(model);
+
+        assertThat(context.version(), equalTo(Context.LATEST_VERSION));
+    }
+
+    public void testLatestVersionDelegatesToModel() {
+        assertThat(Context.LATEST_VERSION, equalTo(ContextModel.LATEST_VERSION));
+    }
+
+    // --- Serialization tests ---
+
     public void testSerialization() throws IOException {
         final Context before = createTestContext();
 
@@ -87,8 +133,6 @@ public class ContextTests extends OpenSearchTestCase {
 
     public void testSerializationWithNullVersion() throws IOException {
         final Context before = new Context("test-context", null, Collections.emptyMap());
-
-        // null version should be converted to LATEST_VERSION
         assertThat(before.version(), equalTo(Context.LATEST_VERSION));
 
         final BytesStreamOutput out = new BytesStreamOutput();
@@ -101,65 +145,43 @@ public class ContextTests extends OpenSearchTestCase {
         assertThat(after.version(), equalTo(Context.LATEST_VERSION));
     }
 
+    // --- Model interop tests ---
+
     public void testModelDeserialization() throws IOException {
         final Context context = createTestContext();
 
-        // Serialize using Context
         final BytesStreamOutput out = new BytesStreamOutput();
         context.writeTo(out);
 
-        // Deserialize using ContextModel
         final StreamInput in = out.bytes().streamInput();
         final ContextModel model = new ContextModel(in);
 
-        // Verify all fields match
         assertThat(model.name(), equalTo(context.name()));
         assertThat(model.version(), equalTo(context.version()));
         assertThat(model.params(), equalTo(context.params()));
     }
 
     public void testModelToContextSerialization() throws IOException {
-        // Create a Context, serialize it
         final Context original = createTestContext();
 
         final BytesStreamOutput out1 = new BytesStreamOutput();
         original.writeTo(out1);
 
-        // Deserialize as ContextModel
         final StreamInput in1 = out1.bytes().streamInput();
         final ContextModel model = new ContextModel(in1);
 
-        // Serialize the model
         final BytesStreamOutput out2 = new BytesStreamOutput();
         model.writeTo(out2);
 
-        // Deserialize as Context
         final StreamInput in2 = out2.bytes().streamInput();
         final Context restored = new Context(in2);
 
-        // Verify round-trip preserves data
         assertThat(restored.name(), equalTo(original.name()));
         assertThat(restored.version(), equalTo(original.version()));
         assertThat(restored.params(), equalTo(original.params()));
     }
 
-    public void testContextFromModel() {
-        ContextModel model = new ContextModel("model-context", "2.0", Map.of("param", "value"));
-        Context context = new Context(model);
-
-        assertThat(context.name(), equalTo("model-context"));
-        assertThat(context.version(), equalTo("2.0"));
-        assertThat(context.params().get("param"), equalTo("value"));
-        assertThat(context.model(), equalTo(model));
-    }
-
-    public void testSimpleConstructor() {
-        Context context = new Context("simple-context");
-
-        assertThat(context.name(), equalTo("simple-context"));
-        assertThat(context.version(), equalTo(Context.LATEST_VERSION));
-        assertTrue(context.params().isEmpty());
-    }
+    // --- XContent tests ---
 
     public void testToXContent() throws IOException {
         Map<String, Object> params = new HashMap<>();
@@ -173,6 +195,16 @@ public class ContextTests extends OpenSearchTestCase {
         assertTrue(json.contains("\"name\":\"test-context\""));
         assertTrue(json.contains("\"version\":\"1.0\""));
         assertTrue(json.contains("\"params\":{\"key\":\"value\"}"));
+    }
+
+    public void testToXContentAlwaysWritesVersion() throws IOException {
+        Context context = new Context("test", null, Map.of());
+
+        XContentBuilder builder = XContentFactory.jsonBuilder();
+        context.toXContent(builder, null);
+        String json = builder.toString();
+
+        assertTrue(json.contains("\"version\":\"" + Context.LATEST_VERSION + "\""));
     }
 
     public void testFromXContent() throws IOException {
@@ -196,6 +228,32 @@ public class ContextTests extends OpenSearchTestCase {
         assertThat(context.version(), equalTo(Context.LATEST_VERSION));
     }
 
+    public void testFromXContentWithoutParams() throws IOException {
+        String json = "{\"name\":\"test\",\"version\":\"1.0\"}";
+
+        XContentParser parser = createParser(XContentType.JSON.xContent(), json);
+        Context context = Context.fromXContent(parser);
+
+        assertThat(context.name(), equalTo("test"));
+        assertThat(context.version(), equalTo("1.0"));
+        assertNull(context.params());
+    }
+
+    public void testXContentRoundTrip() throws IOException {
+        Context original = new Context("round-trip", "3.0", Map.of("k", "v"));
+
+        XContentBuilder builder = XContentFactory.jsonBuilder();
+        original.toXContent(builder, null);
+        String json = builder.toString();
+
+        XContentParser parser = createParser(XContentType.JSON.xContent(), json);
+        Context parsed = Context.fromXContent(parser);
+
+        assertEquals(original, parsed);
+    }
+
+    // --- Equals/hashCode tests ---
+
     public void testEquals() {
         Context context1 = new Context("test", "1.0", Map.of("key", "value"));
         Context context2 = new Context("test", "1.0", Map.of("key", "value"));
@@ -216,6 +274,8 @@ public class ContextTests extends OpenSearchTestCase {
         assertNotEquals(context1, context4);
     }
 
+    // --- toString test ---
+
     public void testToString() {
         Context context = new Context("test-context", "1.0", Map.of("key", "value"));
         String str = context.toString();
@@ -225,6 +285,8 @@ public class ContextTests extends OpenSearchTestCase {
         assertTrue(str.contains("key"));
         assertTrue(str.contains("value"));
     }
+
+    // --- Helper ---
 
     private Context createTestContext() {
         String name = randomAlphaOfLengthBetween(3, 10);

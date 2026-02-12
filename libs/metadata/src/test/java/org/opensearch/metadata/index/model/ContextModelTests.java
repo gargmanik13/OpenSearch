@@ -31,6 +31,24 @@ import static org.hamcrest.Matchers.equalTo;
 
 public class ContextModelTests extends OpenSearchTestCase {
 
+    // --- Constructor tests ---
+
+    public void testNullVersionDefaultsToLatest() {
+        ContextModel model = new ContextModel("test", null, Map.of());
+        assertThat(model.version(), equalTo(ContextModel.LATEST_VERSION));
+    }
+
+    public void testExplicitVersionPreserved() {
+        ContextModel model = new ContextModel("test", "2.0", Map.of());
+        assertThat(model.version(), equalTo("2.0"));
+    }
+
+    public void testLatestVersionConstant() {
+        assertThat(ContextModel.LATEST_VERSION, equalTo("_latest"));
+    }
+
+    // --- Serialization tests ---
+
     public void testSerialization() throws IOException {
         final ContextModel before = createTestItem();
 
@@ -50,17 +68,10 @@ public class ContextModelTests extends OpenSearchTestCase {
         assertEquals(before.hashCode(), after.hashCode());
     }
 
-    public void testEquals() {
-        ContextModel model1 = createTestItem();
-        ContextModel model2 = new ContextModel(model1.name(), model1.version(), model1.params());
-
-        assertNotSame(model1, model2);
-        assertEquals(model1, model2);
-        assertEquals(model1.hashCode(), model2.hashCode());
-    }
-
     public void testSerializationWithNullVersion() throws IOException {
+        // null version gets defaulted to LATEST_VERSION in constructor
         final ContextModel before = new ContextModel("test-context", null, Collections.emptyMap());
+        assertThat(before.version(), equalTo(ContextModel.LATEST_VERSION));
 
         final ByteArrayOutputStream baos = new ByteArrayOutputStream();
         final StreamOutput out = new OutputStreamStreamOutput(baos);
@@ -72,9 +83,7 @@ public class ContextModelTests extends OpenSearchTestCase {
         final ContextModel after = new ContextModel(in);
 
         assertThat(after, equalTo(before));
-        assertThat(after.name(), equalTo("test-context"));
-        assertNull(after.version());
-        assertTrue(after.params().isEmpty());
+        assertThat(after.version(), equalTo(ContextModel.LATEST_VERSION));
     }
 
     public void testSerializationWithParams() throws IOException {
@@ -129,44 +138,46 @@ public class ContextModelTests extends OpenSearchTestCase {
         assertEquals(Arrays.asList("a", "b", "c"), after.params().get("list"));
     }
 
+    // --- Equals/hashCode tests ---
+
+    public void testEquals() {
+        ContextModel model1 = createTestItem();
+        ContextModel model2 = new ContextModel(model1.name(), model1.version(), model1.params());
+
+        assertNotSame(model1, model2);
+        assertEquals(model1, model2);
+        assertEquals(model1.hashCode(), model2.hashCode());
+    }
+
     public void testNotEquals() {
         ContextModel model1 = new ContextModel("name1", "1.0", Collections.emptyMap());
         ContextModel model2 = new ContextModel("name2", "1.0", Collections.emptyMap());
         ContextModel model3 = new ContextModel("name1", "2.0", Collections.emptyMap());
+        ContextModel model4 = new ContextModel("name1", "1.0", Map.of("key", "value"));
 
         assertNotEquals(model1, model2);
         assertNotEquals(model1, model3);
-        assertNotEquals(model2, model3);
+        assertNotEquals(model1, model4);
     }
 
-    private static ContextModel createTestItem() {
-        String name = randomAlphaOfLengthBetween(3, 10);
-        String version = randomBoolean() ? randomAlphaOfLengthBetween(1, 5) : null;
-        Map<String, Object> params = new HashMap<>();
-        if (randomBoolean()) {
-            int numParams = randomIntBetween(1, 5);
-            for (int i = 0; i < numParams; i++) {
-                params.put(randomAlphaOfLengthBetween(3, 10), randomAlphaOfLengthBetween(3, 20));
-            }
-        }
-        return new ContextModel(name, version, params);
+    public void testNotEqualsNull() {
+        assertNotEquals(new ContextModel("test", "1.0", Map.of()), null);
     }
 
-    // XContent Tests
+    public void testNotEqualsDifferentType() {
+        assertNotEquals(new ContextModel("test", "1.0", Map.of()), "not a context model");
+    }
+
+    // --- XContent round-trip tests ---
 
     public void testXContentRoundTrip() throws IOException {
         ContextModel original = createTestItem();
 
-        // Serialize to XContent
         XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
         byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
             ContextModel parsed = ContextModel.fromXContent(parser);
             assertEquals(original.name(), parsed.name());
             assertEquals(original.version(), parsed.version());
@@ -181,16 +192,11 @@ public class ContextModelTests extends OpenSearchTestCase {
 
         ContextModel original = new ContextModel("test-context", "1.0", params);
 
-        // Serialize to XContent
         XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
         byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
             ContextModel parsed = ContextModel.fromXContent(parser);
             assertEquals("test-context", parsed.name());
             assertEquals("1.0", parsed.version());
@@ -199,39 +205,29 @@ public class ContextModelTests extends OpenSearchTestCase {
     }
 
     public void testXContentRoundTripWithNullVersion() throws IOException {
+        // null version defaults to LATEST_VERSION, which is always written
         ContextModel original = new ContextModel("test-context", null, Collections.emptyMap());
+        assertThat(original.version(), equalTo(ContextModel.LATEST_VERSION));
 
-        // Serialize to XContent
         XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
         byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
             ContextModel parsed = ContextModel.fromXContent(parser);
             assertEquals("test-context", parsed.name());
-            assertNull(parsed.version());
-            // params is serialized as empty map, so it comes back as empty map
-            assertEquals(Collections.emptyMap(), parsed.params());
+            assertEquals(ContextModel.LATEST_VERSION, parsed.version());
         }
     }
 
     public void testXContentRoundTripWithNullParams() throws IOException {
         ContextModel original = new ContextModel("test-context", "1.0", null);
 
-        // Serialize to XContent
         XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.startObject();
         original.toXContent(builder, ToXContent.EMPTY_PARAMS);
-        builder.endObject();
         byte[] bytes = BytesReference.bytes(builder).toBytesRef().bytes;
 
-        // Parse back from XContent
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
             ContextModel parsed = ContextModel.fromXContent(parser);
             assertEquals("test-context", parsed.name());
             assertEquals("1.0", parsed.version());
@@ -244,12 +240,71 @@ public class ContextModelTests extends OpenSearchTestCase {
         byte[] bytes = json.getBytes();
 
         try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
-            parser.nextToken(); // START_OBJECT
             ContextModel parsed = ContextModel.fromXContent(parser);
             assertEquals("test", parsed.name());
             assertEquals("1.0", parsed.version());
             assertNotNull(parsed.params());
             assertTrue(parsed.params().containsKey("nested"));
         }
+    }
+
+    public void testFromXContentWithoutVersion() throws IOException {
+        String json = "{\"name\":\"test\"}";
+        byte[] bytes = json.getBytes();
+
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
+            ContextModel parsed = ContextModel.fromXContent(parser);
+            assertEquals("test", parsed.name());
+            // null version from parser → constructor defaults to LATEST_VERSION
+            assertEquals(ContextModel.LATEST_VERSION, parsed.version());
+            assertNull(parsed.params());
+        }
+    }
+
+    public void testFromXContentWithoutParams() throws IOException {
+        String json = "{\"name\":\"test\",\"version\":\"1.0\"}";
+        byte[] bytes = json.getBytes();
+
+        try (XContentParser parser = JsonXContent.jsonXContent.createParser(null, null, bytes)) {
+            ContextModel parsed = ContextModel.fromXContent(parser);
+            assertEquals("test", parsed.name());
+            assertEquals("1.0", parsed.version());
+            assertNull(parsed.params());
+        }
+    }
+
+    public void testToXContentAlwaysWritesVersion() throws IOException {
+        ContextModel model = new ContextModel("test", null, null);
+
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        model.toXContent(builder, ToXContent.EMPTY_PARAMS);
+        String json = builder.toString();
+
+        assertTrue(json.contains("\"version\":\"" + ContextModel.LATEST_VERSION + "\""));
+    }
+
+    public void testToXContentOmitsNullParams() throws IOException {
+        ContextModel model = new ContextModel("test", "1.0", null);
+
+        XContentBuilder builder = JsonXContent.contentBuilder();
+        model.toXContent(builder, ToXContent.EMPTY_PARAMS);
+        String json = builder.toString();
+
+        assertFalse(json.contains("params"));
+    }
+
+    // --- Helper ---
+
+    private static ContextModel createTestItem() {
+        String name = randomAlphaOfLengthBetween(3, 10);
+        String version = randomBoolean() ? randomAlphaOfLengthBetween(1, 5) : null;
+        Map<String, Object> params = new HashMap<>();
+        if (randomBoolean()) {
+            int numParams = randomIntBetween(1, 5);
+            for (int i = 0; i < numParams; i++) {
+                params.put(randomAlphaOfLengthBetween(3, 10), randomAlphaOfLengthBetween(3, 20));
+            }
+        }
+        return new ContextModel(name, version, params);
     }
 }

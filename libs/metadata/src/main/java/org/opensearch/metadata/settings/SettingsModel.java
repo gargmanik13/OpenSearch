@@ -191,20 +191,102 @@ public final class SettingsModel implements Writeable, ToXContentFragment {
      */
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        for (Map.Entry<String, Object> entry : settings.entrySet()) {
-            Object value = entry.getValue();
-            if (value == null) {
-                builder.nullField(entry.getKey());
-            } else if (value instanceof List) {
-                builder.startArray(entry.getKey());
-                for (Object item : (List<?>) value) {
-                    builder.value(item);
-                }
-                builder.endArray();
-            } else {
-                builder.field(entry.getKey(), value.toString());
+        if (!params.paramAsBoolean("flat_settings", false)) {
+            for (Map.Entry<String, Object> entry : getAsStructuredMap().entrySet()) {
+                builder.field(entry.getKey(), entry.getValue());
+            }
+        } else {
+            for (Map.Entry<String, Object> entry : settings.entrySet()) {
+                builder.field(entry.getKey(), entry.getValue());
             }
         }
         return builder;
+    }
+
+    /**
+     * Converts flat dot-separated settings into a nested map structure, then converts
+     * numeric-keyed maps to arrays where appropriate.
+     */
+    private Map<String, Object> getAsStructuredMap() {
+        Map<String, Object> map = new HashMap<>(2);
+        for (Map.Entry<String, Object> entry : settings.entrySet()) {
+            processSetting(map, "", entry.getKey(), entry.getValue());
+        }
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            if (entry.getValue() instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> valMap = (Map<String, Object>) entry.getValue();
+                entry.setValue(convertMapsToArrays(valMap));
+            }
+        }
+        return map;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void processSetting(Map<String, Object> map, String prefix, String setting, Object value) {
+        int prefixLength = setting.indexOf('.');
+        if (prefixLength == -1) {
+            Map<String, Object> innerMap = (Map<String, Object>) map.get(prefix + setting);
+            if (innerMap != null) {
+                for (Map.Entry<String, Object> entry : innerMap.entrySet()) {
+                    map.put(prefix + setting + "." + entry.getKey(), entry.getValue());
+                }
+            }
+            map.put(prefix + setting, value);
+        } else {
+            String key = setting.substring(0, prefixLength);
+            String rest = setting.substring(prefixLength + 1);
+            Object existingValue = map.get(prefix + key);
+            if (existingValue == null) {
+                Map<String, Object> newMap = new HashMap<>(2);
+                processSetting(newMap, "", rest, value);
+                map.put(prefix + key, newMap);
+            } else if (existingValue instanceof Map) {
+                Map<String, Object> innerMap = (Map<String, Object>) existingValue;
+                processSetting(innerMap, "", rest, value);
+                map.put(prefix + key, innerMap);
+            } else {
+                processSetting(map, prefix + key + ".", rest, value);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object convertMapsToArrays(Map<String, Object> map) {
+        if (map.isEmpty()) {
+            return map;
+        }
+        boolean isArray = true;
+        int maxIndex = -1;
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            if (isArray) {
+                try {
+                    int index = Integer.parseInt(entry.getKey());
+                    if (index >= 0) {
+                        maxIndex = Math.max(maxIndex, index);
+                    } else {
+                        isArray = false;
+                    }
+                } catch (NumberFormatException ex) {
+                    isArray = false;
+                }
+            }
+            if (entry.getValue() instanceof Map) {
+                Map<String, Object> valMap = (Map<String, Object>) entry.getValue();
+                entry.setValue(convertMapsToArrays(valMap));
+            }
+        }
+        if (isArray && (maxIndex + 1) == map.size()) {
+            ArrayList<Object> newValue = new ArrayList<>(maxIndex + 1);
+            for (int i = 0; i <= maxIndex; i++) {
+                Object obj = map.get(Integer.toString(i));
+                if (obj == null) {
+                    return map;
+                }
+                newValue.add(obj);
+            }
+            return newValue;
+        }
+        return map;
     }
 }

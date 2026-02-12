@@ -50,7 +50,6 @@ import org.opensearch.metadata.compress.CompressedData;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedOutputStream;
 
@@ -195,16 +194,7 @@ public final class CompressedXContent {
         if (o == null || getClass() != o.getClass()) return false;
 
         CompressedXContent that = (CompressedXContent) o;
-
-        if (Arrays.equals(compressed(), that.compressed())) {
-            return true;
-        }
-
-        if (compressedData.checksum() != that.compressedData.checksum()) {
-            return false;
-        }
-
-        return uncompressed().equals(that.uncompressed());
+        return compressedData.equals(that.compressedData);
     }
 
     @Override
